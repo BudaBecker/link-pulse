@@ -35,6 +35,7 @@ As operações do LinkPulse, em ordem de frequência:
 | 3 | "Quantos cliques o link `abc123` tem agora?" | Alta (dashboard aberto)  | ✅ Sim (segundos)    | ✅ Sim                        |
 | 4 | "Cliques do link `abc123` entre duas datas"  | Média (análise)        | ✅ Sim (segundos)    | ✅ Sim                        |
 | 5 | "Crie um link curto para esta URL"            | Baixa                    | ✅ Sim               | ❌ Não                       |
+| 6 | "Quais são os links (canais) do cliente 8842?" | Média (painel)           | ✅ Sim (segundos)    | ✅ Sim                        |
 
 As operações 1 e 2 acontecem **no mesmo instante** — o clique do usuário dispara as duas. Essa é a tensão central do sistema, e toda a arquitetura existe para resolvê-la.
 
@@ -107,12 +108,15 @@ Chave: link:abc123
 ┌──────────────┬────────────────────────────────────────────┐
 │ url          │ "https://exemplo.com/campanha-natal"       │
 │ cliente_id   │ 8842                                       │
+│ canal        │ "instagram-stories"   (opcional)           │
 │ criado_em    │ 2026-09-10T14:00:00Z                       │
 │ expira_em    │ 2026-12-25T23:59:59Z   (opcional)          │
 └──────────────┴────────────────────────────────────────────┘
 ```
 
 Por que um Hash e não uma string simples com a URL? Porque o redirecionador precisa checar `expira_em` antes de redirecionar. Guardando tudo junto, isso custa **uma** ida ao banco em vez de duas.
+
+O campo `canal` existe porque, no LinkPulse, **cada canal de divulgação usa o seu próprio link curto**: a mesma campanha gera um link para o Instagram, outro para o e-mail, outro para o anúncio pago. O campo dá nome a cada link no painel ("Instagram: 300 cliques" em vez de "abc123: 300 cliques").
 
 ### Estrutura 2 — Contador de cliques
 
@@ -123,6 +127,14 @@ contador:abc123  ->  INCR   (incrementa em 1, de forma atômica)
 `INCR` é uma operação atômica: mesmo que 500 cliques cheguem no mesmo segundo vindos de nós diferentes, nenhum é perdido por condição de corrida. É o que alimenta o número "cliques agora" do dashboard sem precisar contar linha por linha no Cassandra.
 
 Esse contador é **soft state**: se o Redis perder o valor, ele pode ser recalculado a partir do histórico no Cassandra. É um cache de performance, não a fonte da verdade.
+
+### Estrutura 3 — Set com os links de cada cliente
+
+```
+links:cliente:8842  ->  { abc123, xyz789, k4p2q9 }     (SADD a cada link criado)
+```
+
+Um banco Chave-Valor só busca pela chave exata: não existe "me dê todos os links do cliente 8842". Para o painel comparar os canais de um cliente (operação 6), a criação do link também executa `SADD links:cliente:8842 abc123`. Um **Set** do Redis não guarda repetidos e devolve todos os membros com um único `SMEMBERS` — o painel lê o Set, depois o `canal` e o contador de cada link.
 
 ---
 
@@ -228,9 +240,12 @@ flowchart LR
     H -.-> N3[Nó C]
 ```
 
-### Replicação: Master-Slave
+### Replicação: Master-Slave no Redis, Master-Master no Cassandra
 
-O volume de **leitura** (redirecionamentos + consultas do dashboard) é ordens de magnitude maior que o de **escrita** (criação de link + registro de clique). A replicação Master-Slave se encaixa nesse desequilíbrio: as escritas vão para o master, e as leituras são distribuídas entre várias réplicas, que podem ser adicionadas conforme o tráfego cresce.
+Os dois bancos replicam de formas diferentes, e cada forma combina com o papel do banco:
+
+- **Redis — Master-Slave.** O volume de **leitura** do mapeamento (um `HGETALL` por redirecionamento) é ordens de magnitude maior que o de **escrita** (criação de link). As escritas — criação de link e `INCR` do contador — vão para o master; as leituras do redirecionador são distribuídas entre réplicas, que podem ser adicionadas conforme o tráfego cresce. A replicação do Redis é assíncrona: uma réplica pode estar alguns instantes atrás do master, o que é coerente com a escolha AP.
+- **Cassandra — Master-Master (peer-to-peer).** O Cassandra não tem nó master: qualquer nó aceita leitura e escrita, e cada partição é copiada para vários nós conforme o **fator de replicação** (ex.: 3). Isso atende a escrita em rajada dos eventos de clique, porque nenhum nó único concentra todas as escritas, e mantém o histórico disponível se um nó cair.
 
 ---
 
@@ -261,8 +276,8 @@ O número que importa não é a média, e sim o **pico concentrado em uma única
 
 | Unidade                                            | Conceito aplicado                                                                                    | Onde está neste documento |
 | -------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | -------------------------- |
-| Unidade 1 — Fundamentos de sistemas distribuídos | Limites do relacional, Teorema CAP (AP), modelo BASE, sharding hash-based, replicação Master-Slave | Passos 2 e 6               |
-| Unidade 2 — Chave-Valor                           | Hash do Redis para os atributos do link; contador via `INCR` para a métrica em tempo real          | Passo 4                    |
+| Unidade 1 — Fundamentos de sistemas distribuídos | Limites do relacional, Teorema CAP (AP), modelo BASE, sharding hash-based, replicação Master-Slave (Redis) e Master-Master (Cassandra) | Passos 2 e 6               |
+| Unidade 2 — Chave-Valor                           | Hash do Redis para os atributos do link; contador via `INCR` para a métrica em tempo real; Set com os links de cada cliente | Passo 4                    |
 | Unidade 3 — Wide-Column                           | Modelagem *query-first*; partition key e clustering column coerentes com o padrão de acesso        | Passos 1 e 5               |
 
 ---
