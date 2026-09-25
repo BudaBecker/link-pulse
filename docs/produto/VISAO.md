@@ -21,7 +21,7 @@ Encurtadores de URL genéricos resolvem apenas o redirecionamento. Eles não for
 
 O padrão de escrita de um encurtador de campanha é **imprevisível e explosivo**: a maior parte do tempo o tráfego é baixo, mas um post que viraliza pode gerar centenas de cliques por minuto em um único link, concentrados de forma que nenhum sistema administrativo tradicional precisa suportar. Ao mesmo tempo, o painel de analytics faz agregações constantes (cliques por dia, por canal, por período) sobre um volume de eventos que só cresce.
 
-Essa combinação — leitura de latência mínima para o redirecionamento, escrita em rajada para os eventos de clique, e agregações contínuas para analytics — é o que orienta todas as decisões de modelagem de dados do projeto (ver [Arquitetura](ARQUITETURA.md)).
+Essa combinação — leitura de latência mínima para o redirecionamento, escrita em rajada para os eventos de clique, e agregações contínuas para analytics — é o que orienta todas as decisões de modelagem de dados do projeto (ver [Arquitetura](../arquitetura/ARQUITETURA.md)).
 
 ## Diferenciais em relação a um encurtador genérico
 
@@ -35,4 +35,4 @@ Essa combinação — leitura de latência mínima para o redirecionamento, escr
 
 ## Próximos passos da visão
 
-A visão de longo prazo inclui metadados de campanha mais ricos (tags, UTM, descrição) — um dado semiestruturado e mutável, diferente do evento de clique imutável. Essa evolução está descrita no [roadmap](../README.md#roadmap) do projeto.
+A visão de longo prazo inclui metadados de campanha mais ricos (tags, UTM, descrição) — um dado semiestruturado e mutável, diferente do evento de clique imutável. Essa evolução está descrita no [roadmap](../../README.md#roadmap) do projeto.
