@@ -6,7 +6,7 @@ Plano de tarefas do LinkPulse. Cada tarefa tem uma issue no GitHub, com o marco 
 
 | Marco | Escopo | Situação |
 | --- | --- | --- |
-| **M0 — Preparação** | Processo, requisitos, decisões e specs para desenvolvimento guiado por especificações | Em revisão |
+| **M0 — Preparação** | Processo, requisitos, decisões e specs para desenvolvimento guiado por especificações | Concluído |
 | **M1 — Modelagem inicial** | Descrição do problema, modelagem e justificativa, conforme o checklist da [DISCIPLINA](../produto/DISCIPLINA.md) ([ADR-0011](../decisoes/ADR-0011-marco-1-so-documentacao.md)) | Em andamento; vencimento no AVA 29/09/2026 00:00 (enviar até a noite de 28/09) |
 | **M2 — Sistema completo** | Aplicação funcional (stack em [ADR-0010](../decisoes/ADR-0010-stack-da-aplicacao.md)) e banco de Documentos para metadados de campanha — [README](../../README.md#roadmap) | Specs e implementação planejadas; data a confirmar (penúltima aula, antes da P2) |
 
