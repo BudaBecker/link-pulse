@@ -17,7 +17,7 @@ Prazo: **29/09/2026 às 00:00** (vencimento no AVA) — na prática, o envio pre
 
 | ID | Item exigido | Onde está atendido | Situação |
 | --- | --- | --- | --- |
-| EN-01 | Descrição do problema (2–3 páginas): contexto, requisitos principais, estimativa de volume | [VISAO](VISAO.md), [REQUISITOS](../requisitos/REQUISITOS.md), [ARQUITETURA](../arquitetura/ARQUITETURA.md) §Estimativa de volume | Conteúdo existe; conferir extensão ao montar o PDF |
+| EN-01 | Descrição do problema (2–3 páginas): contexto, requisitos principais, estimativa de volume | [VISAO](VISAO.md), [REQUISITOS](../requisitos/REQUISITOS.md), [ARQUITETURA](../arquitetura/ARQUITETURA.md) §Estimativa de volume | Atendido: no PDF, a VISAO abre o documento, seguida das operações (ARQUITETURA Passo 1) e da estimativa de volume |
 | EN-02 | Modelagem inicial com diagramas ou exemplos concretos | [ARQUITETURA](../arquitetura/ARQUITETURA.md) Passos 4 e 5; [FUNCIONALIDADES](../arquitetura/FUNCIONALIDADES.md) | Atendido |
 | EN-03 | Justificativa: limites do relacional | [ARQUITETURA](../arquitetura/ARQUITETURA.md) Passo 2 | Atendido |
 | EN-04 | Justificativa: CAP (CP ou AP), justificado pelo cenário | [ARQUITETURA](../arquitetura/ARQUITETURA.md) Passo 6 §CAP | Atendido |
@@ -25,9 +25,9 @@ Prazo: **29/09/2026 às 00:00** (vencimento no AVA) — na prática, o envio pre
 | EN-06 | Justificativa: sharding (hash, range ou directory) e replicação (Master-Slave ou Master-Master) | [ARQUITETURA](../arquitetura/ARQUITETURA.md) Passo 6 §Sharding e §Replicação | Atendido |
 | EN-07 | Chave-Valor: quais dados usam o modelo e ao menos uma técnica estudada (estruturas do Redis, Consistent Hashing ou Vector Clocks) | [ARQUITETURA](../arquitetura/ARQUITETURA.md) Passo 4 (Hash, `INCR` e Set) | Atendido |
 | EN-08 | Wide-Column: modelagem *query-first* | [ARQUITETURA](../arquitetura/ARQUITETURA.md) Passos 1 e 5 | Atendido |
-| EN-09 | Wide-Column: definição de Column Families e, no Cassandra, partition key e clustering columns | [ARQUITETURA](../arquitetura/ARQUITETURA.md) Passo 5 | **Parcial**: partition key e clustering estão; o termo "Column Family" não é definido |
+| EN-09 | Wide-Column: definição de Column Families e, no Cassandra, partition key e clustering columns | [ARQUITETURA](../arquitetura/ARQUITETURA.md) Passo 5 §A tabela | Atendido |
 | EN-10 | Combinação de famílias explícita na justificativa | [ARQUITETURA](../arquitetura/ARQUITETURA.md) Resumo e Passo 3 | Atendido |
-| EN-11 | Um único PDF nomeado `Marco1_NomeDoGrupo_Campus.pdf` (aqui: `Marco1_LinkPulse_AsaNorte.pdf`) | — | Pendente |
+| EN-11 | Um único PDF nomeado `Marco1_NomeDoGrupo_Campus.pdf` (aqui: `Marco1_LinkPulse_AsaNorte.pdf`) | VISAO, ARQUITETURA e FUNCIONALIDADES, nessa ordem, com capa (arquivo gerado, fora do repositório) | Gerado; falta o nome dos integrantes na capa |
 | EN-12 | Upload no AVA, atividade "Marco 1 — Projeto Incremental" | — | Pendente (feito por um integrante) |
 | EN-13 | Apresentação de 3 a 5 minutos em sala, no dia da entrega | — | Pendente |
 

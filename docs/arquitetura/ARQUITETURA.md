@@ -151,6 +151,8 @@ A chave primária tem duas partes:
 
 ### A tabela
 
+No Cassandra, cada tabela é uma **Column Family**, o nome original da estrutura que a CQL passou a chamar de tabela. Ela reúne linhas organizadas por partition key, e cada linha guarda as suas colunas. A column family do LinkPulse é `cliques_por_link`:
+
 ```sql
 CREATE TABLE cliques_por_link (
   short_code   text,        -- partition key: em qual nó fica

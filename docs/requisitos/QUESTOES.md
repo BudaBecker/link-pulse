@@ -1,6 +1,6 @@
 # Questões
 
-Dúvidas, lacunas e contradições encontradas na documentação. Uma questão aberta bloqueia os requisitos e specs que a citam.
+Dúvidas, lacunas e contradições encontradas na documentação. Uma questão aberta bloqueia os requisitos e specs que a citam. Uma questão adiada não bloqueia: o requisito segue com o comportamento mais simples já documentado, e a questão volta a ser discutida depois do Marco 2.
 
 Quando uma questão for respondida:
 
@@ -11,6 +11,12 @@ Quando uma questão for respondida:
 A coluna "Proposta" é só uma sugestão para acelerar a decisão; ela não vale como requisito.
 
 ## Abertas
+
+Nenhuma.
+
+## Adiadas (pós-Marco 2)
+
+O projeto é da disciplina e mostra o básico de cada família NoSQL. Estas questões refinam a modelagem além do que o Marco 1 e o Marco 2 exigem; ficam registradas para depois do Marco 2.
 
 | ID | Tipo | Questão | Origem | Afeta | Proposta (não aprovada) |
 | --- | --- | --- | --- | --- | --- |
