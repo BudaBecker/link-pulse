@@ -8,7 +8,7 @@
 | [arquitetura/](arquitetura/README.md) | Modelagem de dados, justificativa técnica e fluxos | [ARQUITETURA.md](arquitetura/ARQUITETURA.md) |
 | [requisitos/](requisitos/README.md) | RF, RNF e RN com origem e critério; questões abertas | [REQUISITOS.md](requisitos/REQUISITOS.md) |
 | [decisoes/](decisoes/README.md) | Registro de decisões (ADR) | [README](decisoes/README.md) |
-| [specs/](specs/README.md) | Especificações de entrega: plano e critérios de aceitação | [SPEC-001](specs/SPEC-001-redirecionamento.md) |
+| [specs/](specs/README.md) | Especificações de entrega: plano e critérios de aceitação | [SPEC-004](specs/SPEC-004-aplicacao.md) |
 | [roadmap/](roadmap/README.md) | Marcos e tarefas, com uma issue no GitHub para cada tarefa | [ROADMAP.md](roadmap/ROADMAP.md) |
 
 ## Como as peças se ligam

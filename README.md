@@ -27,9 +27,10 @@ Justificativa completa em [ARQUITETURA](docs/arquitetura/ARQUITETURA.md); fluxos
 
 ## Estado atual
 
-- Documentação do Marco 1 (modelagem e justificativa) pronta; checklist da disciplina em [DISCIPLINA](docs/produto/DISCIPLINA.md).
-- O Marco 1 entrega só a documentação exigida pela disciplina ([ADR-0011](docs/decisoes/ADR-0011-marco-1-so-documentacao.md)). A aplicação é do Marco 2, em Python + FastAPI com Redis e Cassandra via Docker Compose ([ADR-0010](docs/decisoes/ADR-0010-stack-da-aplicacao.md)).
-- Decisões pendentes em [QUESTOES](docs/requisitos/QUESTOES.md).
+- Marco 1 concluído: documentação de modelagem e justificativa; checklist da disciplina em [DISCIPLINA](docs/produto/DISCIPLINA.md).
+- Marco 2 em andamento, com apresentação em 25/11/2026. O resultado principal é um benchmark SQL x NoSQL: as operações do produto medidas no Redis e no Cassandra e, como base de comparação, no PostgreSQL ([ADR-0012](docs/decisoes/ADR-0012-marco-2-benchmark-sql-x-nosql.md)).
+- A aplicação e os testes rodam em Python + FastAPI, com Redis, Cassandra, PostgreSQL e MongoDB via Docker Compose ([ADR-0013](docs/decisoes/ADR-0013-stack-e-ambiente-do-marco-2.md)). Ainda não há código: as specs estão em [docs/specs/](docs/specs/README.md).
+- Questões adiadas em [QUESTOES](docs/requisitos/QUESTOES.md).
 
 ## Documentação
 
@@ -46,7 +47,7 @@ Justificativa completa em [ARQUITETURA](docs/arquitetura/ARQUITETURA.md); fluxos
 ## Roadmap
 
 - **Marco 1 — Modelagem inicial:** descrição do problema, modelagem Chave-Valor + Wide-Column e justificativa técnica. Vencimento: 29/09/2026 às 00:00.
-- **Marco 2 — Sistema completo:** aplicação funcional e um banco de Documentos para metadados de campanha (tags, descrição, UTM) — dado semiestruturado e mutável, complementar ao evento de clique imutável.
+- **Marco 2 — Sistema completo:** benchmark SQL x NoSQL sobre uma aplicação simples, com um banco de Documentos para a descrição e as tags das campanhas — dado semiestruturado e mutável, complementar ao evento de clique imutável. Apresentação: 25/11/2026.
 
 Tarefas e andamento em [ROADMAP](docs/roadmap/ROADMAP.md).
 

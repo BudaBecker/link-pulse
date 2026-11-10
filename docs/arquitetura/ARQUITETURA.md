@@ -157,12 +157,15 @@ No Cassandra, cada tabela é uma **Column Family**, o nome original da estrutura
 CREATE TABLE cliques_por_link (
   short_code   text,        -- partition key: em qual nó fica
   clicado_em   timestamp,   -- clustering column: em que ordem fica
+  clique_id    timeuuid,    -- clustering column: desempata cliques no mesmo milissegundo
   pais         text,
   dispositivo  text,
   referrer     text,
-  PRIMARY KEY (short_code, clicado_em)
-) WITH CLUSTERING ORDER BY (clicado_em DESC);
+  PRIMARY KEY ((short_code), clicado_em, clique_id)
+) WITH CLUSTERING ORDER BY (clicado_em DESC, clique_id DESC);
 ```
+
+O `clique_id` existe porque, no Cassandra, gravar uma linha com uma chave primária que já existe sobrescreve a anterior, sem erro. Sem ele, dois cliques do mesmo link no mesmo milissegundo virariam um só ([ADR-0014](../decisoes/ADR-0014-modelo-de-dados-e-metodo-do-benchmark.md)).
 
 Repare no nome: `cliques_por_link`, não `cliques`. Em Wide-Column, é comum a tabela ser nomeada pela **consulta que ela serve**. Se precisássemos de "cliques por país", criaríamos outra tabela com os mesmos dados organizados de outro jeito — duplicação de dados é normal e esperada aqui.
 
@@ -190,7 +193,7 @@ WHERE short_code = 'abc123'
 
 não faz busca nem ordenação: o Cassandra vai direto ao nó certo e lê uma sequência contígua de registros. É a diferença entre procurar um livro numa estante organizada e revirar uma caixa.
 
-O `CLUSTERING ORDER BY (clicado_em DESC)` é o que garante que os cliques mais recentes estejam no início — exatamente o que o painel pergunta com mais frequência ("como este link está performando **agora**").
+O `CLUSTERING ORDER BY (clicado_em DESC, clique_id DESC)` é o que garante que os cliques mais recentes estejam no início — exatamente o que o painel pergunta com mais frequência ("como este link está performando **agora**").
 
 ---
 
@@ -291,3 +294,5 @@ O grupo pretende incorporar um banco de **Documentos** para os metadados de camp
 A justificativa segue a mesma lógica dos passos anteriores: esse dado é **semiestruturado e mutável** (cada campanha tem um conjunto diferente de tags, e elas mudam ao longo do tempo), o oposto do evento de clique, que é **rígido e imutável** (um clique que aconteceu nunca muda). São naturezas diferentes o bastante para justificarem modelos diferentes — que é exatamente o tipo de decisão que este documento vem registrando.
 
 > Banco de Documentos é conteúdo das próximas unidades da disciplina e **não faz parte da justificativa do Marco 1** — está registrado aqui apenas como direção pretendida.
+
+O escopo decidido para o Marco 2, incluindo o benchmark SQL x NoSQL, está no [ADR-0012](../decisoes/ADR-0012-marco-2-benchmark-sql-x-nosql.md).

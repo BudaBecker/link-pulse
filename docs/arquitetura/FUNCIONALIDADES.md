@@ -95,3 +95,5 @@ sequenceDiagram
 ## Funcionalidades futuras (preview do Marco 2)
 
 - Metadados de campanha (tags, descrição, UTM) em um banco de **Documentos**, permitindo enriquecer o link sem impactar o modelo de eventos imutáveis do histórico de cliques.
+
+O escopo decidido para o Marco 2 está no [ADR-0012](../decisoes/ADR-0012-marco-2-benchmark-sql-x-nosql.md); o comportamento da aplicação, na [SPEC-004](../specs/SPEC-004-aplicacao.md).

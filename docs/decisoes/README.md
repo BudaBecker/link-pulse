@@ -25,11 +25,14 @@ As decisões do Marco 1 já estão justificadas em [ARQUITETURA.md](../arquitetu
 | ADR-0004 | Priorizar disponibilidade (AP no CAP) e seguir o modelo BASE | Aceita (Marco 1) | [ARQUITETURA](../arquitetura/ARQUITETURA.md) Passo 6 §CAP e §BASE |
 | ADR-0005 | Gerar `short_code` não sequencial e usá-lo como partition key (sharding hash-based) | Aceita (Marco 1) | [ARQUITETURA](../arquitetura/ARQUITETURA.md) Passo 5 e Passo 6 §Sharding |
 | ADR-0006 | Redirecionar com HTTP `302` | Aceita (Marco 1), sem justificativa escrita | [FUNCIONALIDADES](../arquitetura/FUNCIONALIDADES.md) §Fluxo: redirecionamento |
-| ADR-0007 | Usar banco de Documentos para metadados de campanha no Marco 2 | Proposta | [ARQUITETURA](../arquitetura/ARQUITETURA.md) §Próximo passo |
+| ADR-0007 | Usar banco de Documentos para metadados de campanha no Marco 2 | Aceita | [ARQUITETURA](../arquitetura/ARQUITETURA.md) §Próximo passo; modelo do documento no [ADR-0014](ADR-0014-modelo-de-dados-e-metodo-do-benchmark.md) |
 | ADR-0008 | Entregar uma aplicação funcional já no Marco 1 | Substituída por ADR-0011 | [ADR-0008](ADR-0008-aplicacao-no-marco-1.md) |
 | ADR-0009 | Replicação Master-Slave no Redis e Master-Master no Cassandra | Aceita | [ADR-0009](ADR-0009-replicacao-por-banco.md) |
-| ADR-0010 | Stack da aplicação: Python + FastAPI com Docker Compose | Aceita | [ADR-0010](ADR-0010-stack-da-aplicacao.md) |
+| ADR-0010 | Stack da aplicação: Python + FastAPI com Docker Compose | Substituída por ADR-0013 | [ADR-0010](ADR-0010-stack-da-aplicacao.md) |
 | ADR-0011 | Marco 1 entrega só a documentação exigida; sistema completo no Marco 2 | Aceita | [ADR-0011](ADR-0011-marco-1-so-documentacao.md) |
+| ADR-0012 | Marco 2 entrega um benchmark SQL x NoSQL sobre uma aplicação simples | Aceita | [ADR-0012](ADR-0012-marco-2-benchmark-sql-x-nosql.md) |
+| ADR-0013 | Stack e ambiente do Marco 2: PostgreSQL, MongoDB, gráficos locais e tetos iguais por banco | Aceita | [ADR-0013](ADR-0013-stack-e-ambiente-do-marco-2.md) |
+| ADR-0014 | Modelo de dados do Marco 2 e método do benchmark | Aceita | [ADR-0014](ADR-0014-modelo-de-dados-e-metodo-do-benchmark.md) |
 
 ## Decisões pendentes
 
