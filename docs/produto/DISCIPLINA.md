@@ -35,8 +35,8 @@ Prazo: **29/09/2026 às 00:00** (vencimento no AVA) — na prática, o envio pre
 
 | ID | Item exigido | Situação |
 | --- | --- | --- |
-| EN-14 | Documentação final: modelagem e decisões de arquitetura com justificativa | Em construção ([decisões](../decisoes/README.md)) |
-| EN-15 | Sistema funcional, demonstrável ao vivo (ou em vídeo) | Planejado; stack em [ADR-0010](../decisoes/ADR-0010-stack-da-aplicacao.md) |
-| EN-16 | Apresentação de 10 a 12 minutos: problema, arquitetura, demonstração, lições aprendidas | Pendente |
+| EN-14 | Documentação final: modelagem e decisões de arquitetura com justificativa | Em construção ([decisões](../decisoes/README.md)); fechamento na tarefa RM-34 do [roadmap](../roadmap/ROADMAP.md) |
+| EN-15 | Sistema funcional, demonstrável ao vivo (ou em vídeo) | Especificado: aplicação na [SPEC-004](../specs/SPEC-004-aplicacao.md) e benchmark SQL x NoSQL na [SPEC-005](../specs/SPEC-005-testes-de-stress.md); escopo em [ADR-0012](../decisoes/ADR-0012-marco-2-benchmark-sql-x-nosql.md) |
+| EN-16 | Apresentação de 10 a 12 minutos: problema, arquitetura, demonstração, lições aprendidas | Pendente (tarefa RM-35) |
 
-Data do Marco 2: penúltima aula do semestre, antes da Prova 2 (a confirmar no cronograma da disciplina).
+Data do Marco 2: apresentação em **25/11/2026**.

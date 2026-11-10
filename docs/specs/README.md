@@ -5,7 +5,10 @@ Uma especificação (spec) descreve **uma entrega implementável**: o comportame
 | Arquivo | Conteúdo |
 | --- | --- |
 | [_modelo.md](_modelo.md) | Modelo em branco |
-| [SPEC-001-redirecionamento.md](SPEC-001-redirecionamento.md) | Exemplo mínimo: redirecionamento de link curto (Rascunho) |
+| [SPEC-001-redirecionamento.md](SPEC-001-redirecionamento.md) | Redirecionamento de link curto (Substituída por SPEC-004) |
+| [SPEC-004-aplicacao.md](SPEC-004-aplicacao.md) | Aplicação do Marco 2: clientes, links, redirecionamento, cliques e painel (Pronta) |
+| [SPEC-005-testes-de-stress.md](SPEC-005-testes-de-stress.md) | Benchmark SQL x NoSQL: gerador de carga, cenários e tela de testes (Pronta) |
+| SPEC-002, SPEC-003 | Descartadas antes de serem escritas: criação de link e analytics entraram na SPEC-004 |
 
 ## Como usar
 
@@ -21,6 +24,8 @@ Uma especificação (spec) descreve **uma entrega implementável**: o comportame
 ```
 Rascunho → Pronta → Em implementação → Concluída
 ```
+
+Uma spec incorporada por outra recebe o status `Substituída por SPEC-NNN` e deixa de listar requisitos.
 
 Uma spec em `Rascunho` pode ser escrita a qualquer momento. Implementação de comportamento novo só começa com a spec `Pronta`; correções de comportamento já coberto podem citar a spec existente mesmo se ela estiver `Concluída`.
 

@@ -1,6 +1,6 @@
 # ADR-0010 — Stack da aplicação: Python + FastAPI com Docker Compose
 
-- **Status:** Aceita
+- **Status:** Substituída por ADR-0013
 - **Data:** 2026-09-25
 - **Decidido por:** Gabriel Becker
 - **Relacionados:** Q-20, Q-21, ADR-0008, ADR-0009, RNF-05
