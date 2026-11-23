@@ -125,6 +125,21 @@ def _ler_instante(texto: str) -> datetime:
     return momento.astimezone(UTC)
 
 
+def validar_fim(texto: str) -> str:
+    """Confere um instante final e o devolve; lança ValueError se não servir.
+
+    A regra é uma só para a linha de comando e para o manifesto: data e hora em
+    ISO 8601 com fuso, entre 2000 e 2100.
+    """
+    try:
+        momento = _ler_instante(texto)
+    except (TypeError, ValueError, AttributeError) as erro:
+        raise ValueError(f"instante final inválido ({texto}): use ISO 8601 com fuso, como {FIM_PADRAO}") from erro
+    if not FIM_MINIMO <= momento <= FIM_MAXIMO:
+        raise ValueError(f"instante final fora do intervalo aceito, de 2000 a 2100: {texto}")
+    return texto
+
+
 @dataclass(frozen=True)
 class Base:
     """Parâmetros da base e tudo o que deriva deles sem gerar os cliques."""
@@ -366,8 +381,7 @@ def manifesto_valido(dados: object) -> bool:
     if not isinstance(fim, str):
         return False
     try:
-        if not FIM_MINIMO <= _ler_instante(fim) <= FIM_MAXIMO:
-            return False
+        validar_fim(fim)
         esperado = descrever(Base(semente=dados["semente"], fim=fim))
     except Exception:  # noqa: BLE001 - qualquer erro torna o manifesto inválido, sem interromper quem valida
         return False

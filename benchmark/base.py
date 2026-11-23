@@ -36,7 +36,9 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from referencia import FIM_PADRAO, SEMENTE_PADRAO, Base, assinatura_gerada, descrever, manifesto_valido
+from referencia import (
+    FIM_PADRAO, SEMENTE_PADRAO, Base, assinatura_gerada, descrever, manifesto_valido, validar_fim,
+)
 
 RAIZ = Path(__file__).resolve().parent.parent
 MANIFESTO = Path(__file__).with_name("base-de-referencia.json")
@@ -146,11 +148,24 @@ def esperar_auxiliares() -> None:
 
     Uma cópia de volumes ou uma carga continua no Docker mesmo se o comando que
     a iniciou morrer. Com a trava já tomada, nenhum auxiliar novo aparece aqui.
+
+    Um auxiliar criado e ainda não iniciado (estado `created`) também pode ter
+    ficado para trás, e o cliente do Docker do comando morto ainda conseguiria
+    iniciá-lo no meio desta operação. Como nenhum comando vivo vai iniciá-lo,
+    ele é removido. Os que já estão rodando são esperados.
     """
     avisado = False
     while True:
+        criados = rodar(["docker", "ps", "-a", "-q", "--filter", f"label={ROTULO_AUXILIAR}",
+                         "--filter", "status=created"], capturar=True).split()
+        if criados:
+            print(f"Removendo {len(criados)} contêiner(es) criados e não iniciados por um comando anterior",
+                  file=sys.stderr)
+            subprocess.run(["docker", "rm", "-f", *criados], capture_output=True)
         ids = rodar(["docker", "ps", "-q", "--filter", f"label={ROTULO_AUXILIAR}"], capturar=True).split()
         if not ids:
+            if criados:
+                continue  # confere de novo: um removido pode ter partido antes do rm
             return
         if not avisado:
             nomes = rodar(["docker", "ps", "--filter", f"label={ROTULO_AUXILIAR}", "--format", "{{.Names}}"],
@@ -406,6 +421,9 @@ def cmd_manifesto(semente: int, fim: str, processos: int) -> dict:
     base = Base(semente=semente, fim=fim)
     inicio = time.monotonic()
     manifesto = descrever(base, assinatura_gerada(base, processos))
+    # Última barreira antes de gravar o espelho; na carga, antes de apagar volumes.
+    if not manifesto_valido(manifesto):
+        sys.exit("o manifesto gerado não passa na validação; nada foi gravado nem apagado")
     MANIFESTO.write_text(texto_do_manifesto(manifesto), encoding="utf-8")
     print(f"Manifesto em {MANIFESTO.relative_to(RAIZ)} ({time.monotonic() - inicio:.0f} s): "
           f"semente {manifesto['semente']}, fim {manifesto['fim']}, "
@@ -554,13 +572,22 @@ def cmd_carregar(semente: int, fim: str, processos: int) -> dict:
     return dados
 
 
+def fim_do_argumento(texto: str) -> str:
+    """Recusa um --fim inválido antes de qualquer coisa ser gerada, gravada ou apagada."""
+    try:
+        return validar_fim(texto)
+    except ValueError as erro:
+        raise argparse.ArgumentTypeError(str(erro)) from erro
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="comando", required=True)
     for nome in ("carregar", "manifesto"):
         p = sub.add_parser(nome)
         p.add_argument("--semente", type=int, default=SEMENTE_PADRAO)
-        p.add_argument("--fim", default=FIM_PADRAO, help="instante final dos cliques, ISO 8601 com fuso")
+        p.add_argument("--fim", type=fim_do_argumento, default=FIM_PADRAO,
+                       help="instante final dos cliques, ISO 8601 com fuso, entre 2000 e 2100")
         p.add_argument("--processos", type=int, default=4)
     sub.add_parser("copiar")
     p = sub.add_parser("restaurar")

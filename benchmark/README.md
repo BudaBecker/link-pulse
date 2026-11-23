@@ -18,11 +18,11 @@ Os comandos rodam no próprio computador, fora dos contêineres, na raiz do repo
 | Só reescrever o espelho do manifesto, sem mudar a base carregada | `python benchmark/base.py manifesto` |
 | Voltar aos volumes de desenvolvimento | `docker compose up -d --wait` |
 
-`carregar` e `manifesto` aceitam `--semente`, `--fim` (instante final, em ISO 8601 com fuso, como `2026-11-01T00:00:00Z`) e `--processos` (padrão 4). Cada `carregar`, `copiar` e `restaurar` grava os tempos e a memória medidos em `benchmark/registros/`, fora do Git.
+`carregar` e `manifesto` aceitam `--semente`, `--fim` (instante final, em ISO 8601 com fuso, como `2026-11-01T00:00:00Z`, entre 2000 e 2100) e `--processos` (padrão 4). Um `--fim` fora dessa regra é recusado antes de qualquer coisa ser gerada, gravada ou apagada. O manifesto gerado também passa pela validação antes de ir para o espelho e, na carga, antes de os volumes serem apagados. Cada `carregar`, `copiar` e `restaurar` grava os tempos e a memória medidos em `benchmark/registros/`, fora do Git.
 
 **Um comando por vez.** `copiar` e `restaurar` deixam os bancos parados enquanto trocam os volumes, e outro comando no meio poderia religá-los. Por isso `carregar`, `copiar`, `restaurar` e `conferir` pegam uma trava: um contêiner com nome fixo, `linkpulse-benchmark-trava`, que o Docker não deixa existir duas vezes. Os volumes e o projeto Compose também têm nome fixo, então a trava vale para qualquer cópia do repositório que use o mesmo Docker. Enquanto um comando roda, os outros saem com erro e dizem qual comando, processo e pasta estão com a trava. O contêiner da trava lê a entrada padrão do comando: quando o comando termina ou morre, essa entrada se fecha, o contêiner sai e o Docker o apaga (`--rm`).
 
-Os contêineres que os comandos criam para mexer na base (cópia de volumes, leitura e gravação do manifesto, `carga`) levam o rótulo `linkpulse.benchmark.auxiliar` e podem continuar no Docker depois que o comando morre. Por isso, logo depois de pegar a trava, o comando espera terminar qualquer auxiliar de um comando anterior e avisa quais está esperando. A conferência roda o contêiner `carga` com `--no-deps`, que não sobe os bancos de que ele depende, e recusa bancos parados: ela nunca liga um banco.
+Os contêineres que os comandos criam para mexer na base (cópia de volumes, leitura e gravação do manifesto, `carga`) levam o rótulo `linkpulse.benchmark.auxiliar` e podem continuar no Docker depois que o comando morre. Por isso, logo depois de pegar a trava, o comando espera terminar qualquer auxiliar de um comando anterior e avisa quais está esperando. Um auxiliar criado e ainda não iniciado (estado `created`) é removido, porque nenhum comando vivo vai iniciá-lo e o cliente do Docker do comando morto ainda poderia fazer isso no meio da operação. A conferência roda o contêiner `carga` com `--no-deps`, que não sobe os bancos de que ele depende, e recusa bancos parados: ela nunca liga um banco.
 
 ## A base
 
@@ -160,6 +160,7 @@ O Cassandra coube no teto de 2 GB, então a regra do ADR-0013 (subir o teto dos 
 | 13, depois de uma falha simulada na gravação do manifesto oficial | 0 s | 11 s | 22 s | 34 s | ok |
 | 14, com falha simulada só na gravação do espelho | 1 s | 11 s | 22 s | 35 s | ok |
 | 15, com duas gerações mais novas, de `fim` nulo e de `fim` no ano 1 | 1 s | 25 s | 30 s | 58 s | ok |
+| 16, depois dos testes de auxiliares em `created` | 1 s | 27 s | 29 s | 58 s | ok |
 
 Na terceira, antes de restaurar, a conferência acusou o clique a mais (10.000.001 cliques nos dois lados). Depois da restauração, voltou aos 10.000.000. Na quarta, a conferência acusou o clique de link inexistente, e `conferir` avisou que o manifesto divergia da cópia. A restauração repôs o manifesto e voltou aos 10.000.000. Na quinta, a subida inclui recriar os contêineres com os volumes de benchmark. Na sétima, os três comandos saíram com erro, indicando a restauração que estava com a trava, e nenhum contêiner `carga` foi criado. Na oitava, a geração de selo vazio foi ignorada, e o espelho voltou a ser idêntico ao do Git. A cópia variou de 5 a 26 s com o uso do computador.
 
@@ -177,7 +178,9 @@ Também conferido com o Docker:
 - na restauração 12, a geração com o selo sem `clientes` foi ignorada, e a anterior foi restaurada;
 - na falha simulada da restauração 13, os bancos ficaram parados com a mensagem; na 14, os bancos subiram com o aviso;
 - com o processo que segurava a trava encerrado à força enquanto um auxiliar `copiar-volumes` ainda rodava, a trava foi solta, mas o comando seguinte avisou e esperou: pelos eventos do Docker, o auxiliar terminou às 18:42:06 e o `conferir` só começou às 18:42:09;
-- na restauração 15, as duas gerações com `fim` inválido foram ignoradas com aviso, e a geração íntegra foi restaurada.
+- na restauração 15, as duas gerações com `fim` inválido foram ignoradas com aviso, e a geração íntegra foi restaurada;
+- `carregar --fim 1999-11-01T00:00:00Z`, `carregar --fim 2026-11-01T00:00:00` (sem fuso) e `manifesto --fim 1999-11-01T00:00:00Z` saíram com erro na leitura dos argumentos: os bancos não reiniciaram e os volumes e o espelho ficaram iguais;
+- um auxiliar rotulado criado com `docker create` e não iniciado foi removido pelo comando seguinte: pelos eventos do Docker, ele só teve `create` e `destroy`. Com um auxiliar rodando e outro em `created` ao mesmo tempo, o comando removeu o segundo, esperou o primeiro e só então começou.
 
 A subida é quase toda a partida do Cassandra. Ela não precisa reaplicar o registro de escritas recentes (o commit log), porque a cópia foi feita com o Cassandra drenado.
 
