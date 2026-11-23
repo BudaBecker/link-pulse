@@ -18,6 +18,9 @@ htmlcov/
 # Docker Compose (dados locais)
 docker-compose.override.yml
 
+# Registros das cargas e restaurações da base do benchmark
+benchmark/registros/
+
 # Editores e sistema operacional
 .idea/
 .vscode/

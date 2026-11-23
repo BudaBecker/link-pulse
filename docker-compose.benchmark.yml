@@ -1,0 +1,68 @@
+# Complemento do docker-compose.yml para o benchmark SQL x NoSQL do LinkPulse.
+#
+# O benchmark compara Redis e Cassandra com o PostgreSQL sobre os mesmos dados
+# (a base de referência). Este arquivo troca os volumes dos bancos comparados, e
+# da réplica do Redis, por volumes próprios do benchmark, com nome fixo. Assim,
+# carregar e restaurar a base nunca tocam os volumes de desenvolvimento
+# (linkpulse_*-dados) nem os de outros projetos. Também define o serviço
+# `carga`, que carrega e confere a base.
+#
+# Não é usado à mão: o benchmark/base.py o soma ao docker-compose.yml
+# (docker compose -f docker-compose.yml -f docker-compose.benchmark.yml).
+# Comandos e funcionamento em benchmark/README.md.
+
+services:
+  redis-master:
+    volumes:
+      - redis-master-benchmark:/data
+
+  redis-replica:
+    volumes:
+      - redis-replica-benchmark:/data
+
+  cassandra:
+    volumes:
+      - cassandra-benchmark:/var/lib/cassandra
+
+  postgres:
+    volumes:
+      - postgres-benchmark:/var/lib/postgresql
+
+  carga:
+    # Roda benchmark/carregar.py ou benchmark/conferir.py, chamados pelo
+    # benchmark/base.py. A pasta benchmark entra só para leitura.
+    build: .
+    profiles: ["benchmark"]
+    command: ["python", "benchmark/carregar.py"]
+    cpus: "4"
+    mem_limit: 1g
+    memswap_limit: 1g
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-linkpulse}
+    volumes:
+      - ./benchmark:/linkpulse/benchmark:ro
+      # Manifesto (o arquivo que descreve a base carregada), gravado pelo
+      # benchmark/base.py.
+      - manifesto-benchmark:/linkpulse/manifesto:ro
+    depends_on:
+      redis-replica:
+        condition: service_healthy
+      cassandra-esquema:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+volumes:
+  redis-master-benchmark:
+    name: linkpulse-benchmark-redis-master
+  redis-replica-benchmark:
+    name: linkpulse-benchmark-redis-replica
+  cassandra-benchmark:
+    name: linkpulse-benchmark-cassandra
+  postgres-benchmark:
+    name: linkpulse-benchmark-postgres
+  manifesto-benchmark:
+    # Criado e gravado só pelo benchmark/base.py, na carga e na restauração;
+    # por isso é externo e o Compose não o cria nem o apaga.
+    name: linkpulse-benchmark-manifesto
+    external: true

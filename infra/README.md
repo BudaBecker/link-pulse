@@ -10,6 +10,7 @@ Docker Compose com os bancos do Marco 2, nos tetos e na configuração do [ADR-0
 | Conferir o ambiente | `docker compose run --rm verificar` |
 | Parar, mantendo os dados | `docker compose down` |
 | Parar e apagar os dados | `docker compose down -v` |
+| Carregar ou restaurar a base de referência do benchmark | ver [benchmark/](../benchmark/README.md) |
 
 Com os volumes vazios, a subida leva de 65 a 75 s, quase todos esperando o Cassandra; com os volumes já criados, cerca de 20 s. O esquema do PostgreSQL é criado só quando o volume está vazio. O do Cassandra é aplicado a cada subida, com `IF NOT EXISTS`, pelo `cassandra-esquema`, que depois fica em espera para o `--wait` não tratar a saída dele como falha. A senha do PostgreSQL vem de `POSTGRES_PASSWORD` (padrão `linkpulse`). As portas ficam só em `127.0.0.1`.
 
@@ -53,6 +54,6 @@ Medido em 23/11/2026 com `docker stats`, com os bancos sem dados e outras aplica
 
 Com tudo no ar, a VM ficou com 4,5 GiB disponíveis nessa execução; o valor muda com o que mais estiver aberto no computador.
 
-- **Cassandra perto do teto já sem dados.** Os 1,70 GiB são quase todos memória do processo Java: o heap de 1 GB é reservado inteiro na partida, e o resto é memória da JVM fora do heap. Sobram cerca de 300 MB para os 10 milhões de cliques da carga (RM-29). Se o contêiner for encerrado por falta de memória na carga, vale a regra do ADR-0013: o teto sobe nos três bancos juntos.
+- **Cassandra perto do teto já sem dados.** Os 1,70 GiB são quase todos memória do processo Java: o heap de 1 GB é reservado inteiro na partida, e o resto é memória da JVM fora do heap. Com os 10 milhões de cliques carregados, o contêiner coube no teto de 2 GB, sem encerramento por falta de memória, e o teto dos três bancos continua o mesmo ([medição da carga](../benchmark/README.md#memória-durante-a-carga)).
 - **Folga da máquina.** Os tetos somados dos bancos chegam a 7,5 GB, quase toda a VM. Os bancos usam bem menos que o teto, mas subir o teto dos três para 3 GB passaria da memória da VM; nesse caso é preciso dar mais memória ao Docker (no Windows, `memory` em `.wslconfig`).
 - **Threads de GC do Cassandra.** O script de partida do Cassandra calcula as threads de GC pelas CPUs que enxerga (24), não pelo teto de 2 CPUs. A questão continua aberta, como Q-38 em [QUESTOES](../docs/requisitos/QUESTOES.md#abertas), até a medição do Cassandra sob carga na máquina dedicada.

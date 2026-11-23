@@ -8,6 +8,10 @@ Converse com o time em português do Brasil. Em perguntas e relatórios, descrev
 
 O Marco 1 entrega só documentação: descrição do problema, modelagem e justificativa ([ADR-0011](docs/decisoes/ADR-0011-marco-1-so-documentacao.md), que substitui a [ADR-0008](docs/decisoes/ADR-0008-aplicacao-no-marco-1.md); checklist em [DISCIPLINA](docs/produto/DISCIPLINA.md)). O Marco 2 entrega um benchmark SQL x NoSQL sobre uma aplicação simples ([ADR-0012](docs/decisoes/ADR-0012-marco-2-benchmark-sql-x-nosql.md)), em Python + FastAPI com Redis, Cassandra, PostgreSQL e MongoDB via Docker Compose ([ADR-0013](docs/decisoes/ADR-0013-stack-e-ambiente-do-marco-2.md)). Para implementar comportamento novo, exija uma spec `Pronta`. Correções que restauram comportamento já especificado usam a spec existente; se o comportamento esperado não estiver especificado, prepare e aprove a spec antes de codificar. Refatorações sem mudança de comportamento, documentação e processo dispensam spec (regras em [docs/specs/](docs/specs/README.md)).
 
+## Ambiente controlado do benchmark
+
+O benchmark e a base de referência (`benchmark/`) rodam sempre em ambiente controlado: uma máquina, uma pessoa operando e um comando por vez. As proteções que já existem bastam: a trava dos comandos da base, a recusa a mexer nos volumes de desenvolvimento, a cópia selada e a conferência da base depois de carregar ou restaurar. Não acrescente outra camada de travas, novas tentativas automáticas nem tratamento ou testes para combinações improváveis de falhas, como dois operadores ao mesmo tempo, disco cheio no meio da cópia ou datas extremas. Uma falha nesses casos pode ser resolvida rodando de novo `python benchmark/base.py restaurar`, ou `carregar`.
+
 ## Onde está cada coisa
 
 | Preciso de... | Leia |
