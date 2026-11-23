@@ -1,8 +1,17 @@
 """Base de referência do benchmark: carregar, copiar, restaurar e conferir.
 
-Roda no computador do host, com Python 3.11+ e o Docker; só usa a biblioteca
-padrão. Os bancos rodam com docker-compose.yml + docker-compose.benchmark.yml,
-que usa volumes próprios do benchmark (linkpulse-benchmark-*).
+O benchmark do LinkPulse mede as mesmas operações no lado NoSQL (Redis e
+Cassandra) e no PostgreSQL, e a comparação só vale se os dois lados tiverem os
+mesmos dados. Este script prepara esses dados, a base de referência, e guarda
+uma cópia dos volumes dos bancos para voltar a ela antes de cada repetição das
+medições.
+
+Roda no próprio computador, fora dos contêineres, com Python 3.11 ou mais novo
+e o Docker, e só usa a biblioteca padrão. Os bancos sobem com
+docker-compose.yml mais docker-compose.benchmark.yml, que troca os volumes de
+desenvolvimento por volumes próprios do benchmark (linkpulse-benchmark-*). O
+trabalho dentro dos bancos fica com carregar.py e conferir.py, que rodam no
+contêiner `carga`.
 
     python benchmark/base.py carregar     # recria os volumes de benchmark, carrega, confere e copia
     python benchmark/base.py restaurar    # volta os bancos à cópia guardada e confere o CA-1
@@ -11,8 +20,7 @@ que usa volumes próprios do benchmark (linkpulse-benchmark-*).
     python benchmark/base.py manifesto    # só reescreve o espelho benchmark/base-de-referencia.json
 
 Um comando por vez: todos, menos `manifesto`, pegam a trava, que é o contêiner
-linkpulse-benchmark-trava no Docker.
-Detalhes em benchmark/README.md.
+linkpulse-benchmark-trava no Docker. Detalhes em benchmark/README.md.
 """
 
 from __future__ import annotations
@@ -66,6 +74,9 @@ ARQUIVO_MANIFESTO = "base-de-referencia.json"
 # qualquer cópia do repositório que use o mesmo Docker.
 NOME_TRAVA = "linkpulse-benchmark-trava"
 ROTULO_TRAVA = "linkpulse.benchmark.trava"
+# Todo contêiner que um comando cria para mexer na base leva este rótulo. Eles
+# rodam no Docker e podem sobreviver ao comando; quem pega a trava espera por eles.
+ROTULO_AUXILIAR = "linkpulse.benchmark.auxiliar"
 COMPARADOS = ("redis-master", "cassandra", "postgres")
 # Imagem já usada pelo ambiente, para copiar os volumes sem baixar outra.
 IMAGEM_AUXILIAR = "redis:8.2.11-bookworm"
@@ -95,9 +106,9 @@ class Trava:
     """Um comando por vez sobre a base de benchmark, em qualquer cópia do repositório.
 
     Copiar e restaurar deixam os bancos parados enquanto trocam os volumes; outro
-    comando no meio poderia religá-los. A trava é o contêiner NOME_TRAVA, preso
-    à entrada padrão deste processo: quando o comando termina ou morre, a entrada
-    fecha, o contêiner sai e o `--rm` o apaga.
+    comando no meio poderia religá-los. A trava é o contêiner NOME_TRAVA, que lê
+    a entrada padrão deste processo: quando o comando termina ou morre, essa
+    entrada fecha, o contêiner sai e o `--rm` o apaga.
     """
 
     def __init__(self, comando: str) -> None:
@@ -111,6 +122,7 @@ class Trava:
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         )
         if self.processo.stdout.readline().strip() == b"travado":
+            esperar_auxiliares()
             return self
         erro = self.processo.communicate()[1].decode("utf-8", "replace").strip()
         dono = subprocess.run(
@@ -129,9 +141,35 @@ class Trava:
             subprocess.run(["docker", "rm", "-f", NOME_TRAVA], capture_output=True)
 
 
+def esperar_auxiliares() -> None:
+    """Espera terminarem os contêineres de um comando anterior interrompido.
+
+    Uma cópia de volumes ou uma carga continua no Docker mesmo se o comando que
+    a iniciou morrer. Com a trava já tomada, nenhum auxiliar novo aparece aqui.
+    """
+    avisado = False
+    while True:
+        ids = rodar(["docker", "ps", "-q", "--filter", f"label={ROTULO_AUXILIAR}"], capturar=True).split()
+        if not ids:
+            return
+        if not avisado:
+            nomes = rodar(["docker", "ps", "--filter", f"label={ROTULO_AUXILIAR}", "--format", "{{.Names}}"],
+                          capturar=True).split()
+            print(f"Esperando terminar {len(ids)} contêiner(es) de um comando anterior: {', '.join(nomes)}",
+                  file=sys.stderr)
+            avisado = True
+        # Um contêiner com --rm pode sumir antes do wait; o laço confere de novo.
+        subprocess.run(["docker", "wait", *ids], capture_output=True)
+
+
+def auxiliar(papel: str) -> list[str]:
+    """Início de um `docker run` auxiliar, rotulado para a trava esperar por ele."""
+    return ["docker", "run", "--rm", "--label", f"{ROTULO_AUXILIAR}={papel}"]
+
+
 def ler_do_volume(volume: str) -> str | None:
     resultado = subprocess.run(
-        ["docker", "run", "--rm", "-v", f"{volume}:/v:ro", "--entrypoint", "cat", IMAGEM_AUXILIAR,
+        [*auxiliar("ler-manifesto"), "-v", f"{volume}:/v:ro", "--entrypoint", "cat", IMAGEM_AUXILIAR,
          f"/v/{ARQUIVO_MANIFESTO}"],
         capture_output=True, text=True, encoding="utf-8",
     )
@@ -142,7 +180,7 @@ def gravar_no_volume(volume: str, texto: str) -> None:
     # Grava num temporário e renomeia: o arquivo aparece inteiro ou não aparece.
     temporario = f"/v/.{ARQUIVO_MANIFESTO}.tmp"
     subprocess.run(
-        ["docker", "run", "--rm", "-i", "-v", f"{volume}:/v", "--entrypoint", "sh", IMAGEM_AUXILIAR,
+        [*auxiliar("gravar-manifesto"), "-i", "-v", f"{volume}:/v", "--entrypoint", "sh", IMAGEM_AUXILIAR,
          "-c", f"cat > {temporario} && mv {temporario} /v/{ARQUIVO_MANIFESTO}"],
         input=texto, text=True, encoding="utf-8", check=True,
     )
@@ -271,6 +309,9 @@ def subir() -> float:
 
 def copiar_volumes(origem: dict[str, str], destino: dict[str, str]) -> float:
     """Copia, em paralelo e com os bancos parados, cada volume de origem no de destino."""
+    # Para cada banco, em segundo plano: esvazia o destino e copia a origem
+    # mantendo dono, permissões e datas (cp -a). Sai com erro se alguma cópia
+    # falhar; o du mostra no fim o tamanho de cada destino.
     montagens = []
     for banco in BANCOS:
         montagens += ["-v", f"{origem[banco]}:/origem/{banco}:ro", "-v", f"{destino[banco]}:/destino/{banco}"]
@@ -283,10 +324,11 @@ def copiar_volumes(origem: dict[str, str], destino: dict[str, str]) -> float:
         "du -sh /destino/*; exit $falha"
     )
     inicio = time.monotonic()
-    rodar(["docker", "run", "--rm", *montagens, "--entrypoint", "sh", IMAGEM_AUXILIAR, "-c", script])
+    rodar([*auxiliar("copiar-volumes"), *montagens, "--entrypoint", "sh", IMAGEM_AUXILIAR, "-c", script])
     return time.monotonic() - inicio
 
 
+# Unidades em que o docker stats mostra a memória.
 _UNIDADES = {"B": 1, "KiB": 2**10, "MiB": 2**20, "GiB": 2**30, "kB": 10**3, "MB": 10**6, "GB": 10**9}
 
 
@@ -296,7 +338,12 @@ def _bytes(texto: str) -> float:
 
 
 class MonitorMemoria:
-    """Amostra o `docker stats` dos bancos comparados enquanto a carga roda."""
+    """Mede o pico de memória dos bancos comparados enquanto a carga roda.
+
+    Amostra o `docker stats` numa thread à parte. O relatório junta o pico
+    registrado pelo cgroup (o controle de recursos do Linux que aplica o teto do
+    contêiner) e diz se o Docker encerrou o contêiner por falta de memória.
+    """
 
     def __init__(self) -> None:
         self.ids = {conteiner(s): s for s in COMPARADOS}
@@ -379,7 +426,8 @@ def cmd_conferir(completo: bool) -> float:
               "a conferência usa o da base.", file=sys.stderr)
     inicio = time.monotonic()
     # --no-deps: a conferência nunca liga bancos, nem no meio de outra operação.
-    argumentos = ["run", "--rm", "--no-deps", "carga", "python", "benchmark/conferir.py"]
+    argumentos = ["run", "--rm", "--no-deps", "--label", f"{ROTULO_AUXILIAR}=conferir", "carga",
+                  "python", "benchmark/conferir.py"]
     compose(*argumentos, *(["--completo"] if completo else []))
     return time.monotonic() - inicio
 
@@ -393,13 +441,14 @@ def cmd_copiar() -> dict:
         rodar(["docker", "exec", conteiner(servico), "redis-cli", "SAVE"])
     cassandra = conteiner("cassandra")
     inicio = time.monotonic()
-    # A parada normal do Cassandra esvazia as memtables no disco (drain);
-    # o prazo longo evita que o Docker o encerre à força no meio.
+    # Na parada normal, o Cassandra grava no disco os dados que ainda estavam só
+    # na memória (as memtables), o que ele chama de drain. O prazo longo evita
+    # que o Docker o encerre à força no meio.
     compose("stop", "-t", "300", *BANCOS)
     parada = time.monotonic() - inicio
     logs = subprocess.run(["docker", "logs", "--tail", "200", cassandra], capture_output=True, text=True)
-    # O gancho de parada do Cassandra 5 grava as memtables ("Reason: DRAIN")
-    # e termina com esta linha.
+    # Esse drain aparece no log como "Reason: DRAIN", e a parada termina com
+    # esta linha.
     drenado = "Cassandra shutdown complete" in logs.stdout + logs.stderr
     print(f"  bancos parados em {parada:.0f} s; Cassandra drenado: {'sim' if drenado else 'NÃO'}")
     # A cópia anterior só é apagada depois que a nova estiver selada.
@@ -486,8 +535,8 @@ def cmd_carregar(semente: int, fim: str, processos: int) -> dict:
     inicio = time.monotonic()
     with MonitorMemoria() as monitor:
         try:
-            compose("run", "--rm", "--no-deps", "carga", "python", "benchmark/carregar.py",
-                    "--processos", str(processos))
+            compose("run", "--rm", "--no-deps", "--label", f"{ROTULO_AUXILIAR}=carregar", "carga",
+                    "python", "benchmark/carregar.py", "--processos", str(processos))
         finally:
             carga = time.monotonic() - inicio
             memoria = monitor.relatorio()

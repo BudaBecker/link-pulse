@@ -1,6 +1,14 @@
 """Confere a base de referência nos dois lados (CA-1 da SPEC-005).
 
-Roda no contêiner `carga`: python benchmark/base.py conferir [--completo]
+O benchmark do LinkPulse só compara o lado NoSQL (Redis e Cassandra) com o
+PostgreSQL se os dois tiverem os mesmos dados. O primeiro critério de aceitação
+da spec dos testes de stress (CA-1) exige que, depois da carga e de cada
+restauração, os dois lados tenham os mesmos links e cliques, com 20% dos
+cliques no link popular.
+
+Não é chamado à mão: `python benchmark/base.py conferir [--completo]` roda este
+script no contêiner `carga`, e `carregar` e `restaurar` também o chamam.
+O esperado vem do manifesto da base.
 
 Sempre, consultando os próprios bancos:
 - links: chaves `link:*` no Redis e linhas de `links` no PostgreSQL;
@@ -114,6 +122,7 @@ def lado_nosql(sessao, base: Base, esperado_por_link: dict[str, int]) -> dict:
 
 
 def lado_postgres(conexao) -> dict:
+    """As mesmas contagens de lado_nosql, nas tabelas do PostgreSQL."""
     cursor = conexao.cursor()
     links = cursor.execute("SELECT count(*) FROM links").fetchone()[0]
     cliques = dict(cursor.execute("SELECT short_code, count(*) FROM cliques GROUP BY short_code"))
@@ -129,6 +138,7 @@ def lado_postgres(conexao) -> dict:
 
 
 def ler_tudo_nosql(sessao) -> tuple[Counter, Assinatura]:
+    """Lê todos os cliques do Cassandra: contagem por dispositivo e assinatura."""
     dispositivos: Counter = Counter()
     assinatura = Assinatura()
     consulta = SimpleStatement(
@@ -145,6 +155,7 @@ def ler_tudo_nosql(sessao) -> tuple[Counter, Assinatura]:
 
 
 def ler_tudo_postgres(conexao) -> tuple[Counter, Assinatura]:
+    """O mesmo no PostgreSQL, com um cursor no servidor, que entrega as linhas aos poucos."""
     dispositivos: Counter = Counter()
     assinatura = Assinatura()
     with conexao.cursor(name="todos_os_cliques") as cursor:
@@ -161,6 +172,7 @@ def ler_tudo_postgres(conexao) -> tuple[Counter, Assinatura]:
 
 
 def relatar(nome: str, lado: dict, esperado: dict) -> dict:
+    """Mostra e confere um lado contra o manifesto; devolve o resumo desse lado."""
     popular = esperado["link_popular"]["short_code"]
     total = sum(lado["cliques_por_link"].values())
     do_popular = lado["cliques_por_link"].get(popular, 0)

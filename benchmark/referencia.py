@@ -1,8 +1,15 @@
-"""Base de referência do benchmark: geração determinística (SPEC-005, ADR-0014).
+"""Base de referência do benchmark: geração determinística dos dados.
 
-Só biblioteca padrão: roda no contêiner da carga e no computador do host.
-A mesma semente e o mesmo instante final produzem os mesmos clientes, links e
-cliques, com os mesmos identificadores e timestamps, em qualquer dia.
+O benchmark do LinkPulse compara o lado NoSQL (Redis e Cassandra) com o
+PostgreSQL sobre os mesmos dados. Este módulo gera esses dados: a mesma
+semente e o mesmo instante final produzem os mesmos clientes, links e cliques,
+com os mesmos identificadores e horários, em qualquer dia e em qualquer
+máquina. Os números seguem a spec dos testes de stress (docs/specs/SPEC-005) e
+o modelo de dados do benchmark (docs/decisoes/ADR-0014).
+
+É importado por base.py, no computador, para gerar e validar o manifesto da
+base, e por carregar.py e conferir.py, no contêiner `carga`. Por isso só usa a
+biblioteca padrão.
 
 - 150 clientes com 300 links cada (45 mil links).
 - 10 milhões de cliques nos 90 dias que terminam em `fim`.
@@ -10,9 +17,10 @@ cliques, com os mesmos identificadores e timestamps, em qualquer dia.
   os outros links o mais igualmente possível (177 ou 178 cada).
 - Dispositivo em proporção exata: 60% mobile, 30% desktop, 5% tablet, 5% outro.
 
-Os cliques são gerados em blocos de até `BLOCO` eventos, cada um com o seu
-próprio gerador aleatório. Assim, qualquer bloco pode ser gerado sozinho, em
-qualquer ordem e em qualquer processo, sem manter os 10 milhões em memória.
+Os cliques são gerados em blocos de até `BLOCO` cliques, cada um com o seu
+próprio gerador de números aleatórios. Assim, qualquer bloco pode ser gerado
+sozinho, em qualquer ordem e em qualquer processo, sem manter os 10 milhões em
+memória.
 """
 
 from __future__ import annotations
@@ -37,7 +45,8 @@ PARCELA_POPULAR = 0.20
 DIAS = 90
 BLOCO = 10_000
 
-# Proporção exata dos dispositivos (Q-37), em vigésimos: 12, 6, 1 e 1.
+# Proporção decidida na questão sobre as categorias de dispositivo (Q-37). Cada
+# parcela dos 10 milhões de cliques dá um número inteiro, e o total sai exato.
 DISPOSITIVOS = (("mobile", 0.60), ("desktop", 0.30), ("tablet", 0.05), ("outro", 0.05))
 
 # Origem do clique; None é acesso direto, sem referrer.
@@ -53,7 +62,11 @@ CANAIS = ("instagram", "email", "anuncio", "whatsapp", "site")
 BASE62 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 
 EPOCA = datetime(1970, 1, 1, tzinfo=UTC)
-# Intervalos de 100 ns entre 15/10/1582 (época do UUID versão 1) e 01/01/1970.
+# Intervalo aceito para o instante final de um manifesto.
+FIM_MINIMO = datetime(2000, 1, 1, tzinfo=UTC)
+FIM_MAXIMO = datetime(2100, 1, 1, tzinfo=UTC)
+# O UUID versão 1 conta o tempo em intervalos de 100 ns desde 15/10/1582. Este
+# é o número desses intervalos até 01/01/1970, o início do tempo Unix.
 _DESLOCAMENTO_UUID1 = 0x01B21DD213814000
 
 
@@ -191,9 +204,11 @@ class Base:
         return blocos
 
     def _permutacao_dispositivo(self) -> tuple[int, int]:
-        # f(i) = (a*i + b) mod N é uma bijeção em [0, N) quando mdc(a, N) = 1.
-        # Cortar f(i) nos limites 60/30/5/5 dá a proporção exata no total, e o
-        # passo próximo da razão áurea espalha os dispositivos entre os links.
+        # Cada clique i recebe a posição f(i) = (a*i + b) mod N, com N = 10
+        # milhões. Quando a e N não têm divisor comum, cada posição de 0 a N-1
+        # aparece uma única vez. Assim, cortar as posições nos limites 60/30/5/5
+        # dá a proporção exata no total. Um passo a perto de 0,618 N (a razão
+        # áurea) espalha os dispositivos entre os links, sem agrupá-los.
         a = int(CLIQUES * 0.6180339887498949)
         while math.gcd(a, CLIQUES) != 1:
             a += 1
@@ -217,8 +232,12 @@ class Base:
         inicio_ms, duracao_ms = self.inicio_ms, self.duracao_ms
         for i in range(bloco.primeiro_clique, bloco.primeiro_clique + bloco.quantidade):
             ms = inicio_ms + rng.randrange(duracao_ms)
-            # timeuuid (versão 1) com o mesmo milissegundo do clique; o resto
-            # do relógio, a sequência e o nó vêm do gerador do bloco.
+            # Monta o timeuuid do clique, um UUID versão 1. O relógio do UUID
+            # cai dentro do milissegundo do clique; a fração abaixo do
+            # milissegundo, a sequência e o nó, que um UUID real tiraria do
+            # relógio e da placa de rede, vêm do gerador do bloco. O bit 40 do
+            # nó o marca como sorteado, e não como endereço de placa de rede.
+            # Os bits de versão (1) e de variante ficam onde o padrão manda.
             ts = ms * 10_000 + rng.randrange(10_000) + _DESLOCAMENTO_UUID1
             sequencia = rng.getrandbits(14)
             no = rng.getrandbits(48) | (1 << 40)
@@ -249,7 +268,13 @@ def linha_canonica(clique: Clique) -> bytes:
 
 
 class Assinatura:
-    """Soma de hashes dos cliques: não depende da ordem de leitura."""
+    """Assinatura de um conjunto de cliques, para comparar bancos sem ler linha a linha.
+
+    Cada clique vira um resumo (hash) de 8 bytes da sua linha canônica, e a
+    assinatura é a soma dos resumos, descartando o que passa de 64 bits. A soma
+    não depende da ordem: dois bancos lidos em ordens diferentes dão a mesma
+    assinatura se tiverem os mesmos cliques.
+    """
 
     MODULO = 1 << 64
 
@@ -284,6 +309,8 @@ def assinatura_gerada(base: Base, processos: int) -> Assinatura:
     from multiprocessing import get_context
 
     blocos = base.blocos()
+    # Oito partes por processo, com os blocos intercalados, para dividir o
+    # trabalho por igual entre os processos.
     partes = [(base, blocos[n::processos * 8]) for n in range(processos * 8)]
     total = Assinatura()
     with get_context("spawn").Pool(processos) as pool:
@@ -326,16 +353,22 @@ def manifesto_valido(dados: object) -> bool:
     """Diz se o manifesto é exatamente o que a semente e o instante final geram.
 
     Recalcula todos os campos a partir de `semente` e `fim` (menos de 1 s) e
-    exige igualdade, mais uma assinatura de 16 dígitos hexadecimais. Pega campo
-    faltando, campo a mais e valor alterado.
+    exige igualdade, mais uma assinatura de 16 dígitos hexadecimais e um `fim`
+    com fuso entre 2000 e 2100. Pega campo faltando, campo a mais e valor
+    alterado, e nunca lança exceção: um manifesto que não passa só é recusado.
     """
     if not isinstance(dados, dict) or not isinstance(dados.get("semente"), int):
         return False
     assinatura = dados.get("assinatura_cliques")
     if not isinstance(assinatura, str) or not re.fullmatch(r"[0-9a-f]{16}", assinatura):
         return False
+    fim = dados.get("fim")
+    if not isinstance(fim, str):
+        return False
     try:
-        esperado = descrever(Base(semente=dados["semente"], fim=dados["fim"]))
-    except (KeyError, TypeError, ValueError):
+        if not FIM_MINIMO <= _ler_instante(fim) <= FIM_MAXIMO:
+            return False
+        esperado = descrever(Base(semente=dados["semente"], fim=fim))
+    except Exception:  # noqa: BLE001 - qualquer erro torna o manifesto inválido, sem interromper quem valida
         return False
     return {k: v for k, v in dados.items() if k != "assinatura_cliques"} == esperado

@@ -1,17 +1,23 @@
 """Carrega a base de referência nos dois lados do benchmark (SPEC-005, passo 1).
 
-Roda no contêiner `carga`, com as bibliotecas fixadas; quem o chama é
-`python benchmark/base.py carregar`, que antes recria os volumes de benchmark.
-Os parâmetros vêm do manifesto da base, que o base.py grava no volume
-linkpulse-benchmark-manifesto antes da carga.
+O benchmark do LinkPulse compara o lado NoSQL (Redis e Cassandra) com o
+PostgreSQL, e os dois lados precisam dos mesmos dados. Este script grava nos
+três bancos os clientes, links e cliques que referencia.py gera.
+
+Não é chamado à mão: `python benchmark/base.py carregar` recria os volumes do
+benchmark vazios e roda este script no contêiner `carga`, com as bibliotecas
+fixadas. A semente e o instante final vêm do manifesto da base, que o base.py
+grava no volume linkpulse-benchmark-manifesto antes da carga.
 
 - Redis: Hash `cliente:{id}` (fora do Set `clientes`), Hash `link:{short_code}`,
   Set `links:cliente:{id}` e `contador:{short_code}` com o total de cliques.
-- Cassandra: `cliques_por_link`, em lotes UNLOGGED de uma só partição, com um
-  número limitado de lotes em andamento por processo.
-- PostgreSQL: `links`, `contadores` e `cliques` por COPY, no modelo do ADR-0014;
-  depois `VACUUM (ANALYZE)` e `CHECKPOINT`, para o autovacuum não rodar no meio
-  das medições.
+- Cassandra: `cliques_por_link`, em lotes de linhas do mesmo link, isto é, de
+  uma só partição. Os lotes são UNLOGGED, sem o registro prévio que o Cassandra
+  faz para lotes que atravessam partições, e cada processo mantém um número
+  limitado deles em andamento.
+- PostgreSQL: `links`, `contadores` e `cliques` por COPY, o comando de carga em
+  massa, no modelo do ADR-0014. Depois, `VACUUM (ANALYZE)` e `CHECKPOINT`, para
+  a manutenção automática (autovacuum) não rodar no meio das medições.
 
 Os cliques são gerados bloco a bloco em cada processo e nunca ficam todos em
 memória. A carga recusa bancos que já tenham dados.
@@ -39,10 +45,10 @@ from referencia import Base, Bloco, ms_para_datetime, iso
 
 # Manifesto vinculado aos volumes de benchmark (volume linkpulse-benchmark-manifesto).
 MANIFESTO = Path("/linkpulse/manifesto/base-de-referencia.json")
-LINHAS_POR_LOTE_CASSANDRA = 30  # cerca de 3 KiB, abaixo do aviso de 5 KiB do Cassandra
-LOTES_EM_ANDAMENTO = 16  # por processo
-LINHAS_POR_TAREFA = 100_000
-TENTATIVAS = 5
+LINHAS_POR_LOTE_CASSANDRA = 30  # cerca de 3 KiB; o Cassandra avisa no log a partir de 5 KiB
+LOTES_EM_ANDAMENTO = 16  # lotes enviados e ainda sem resposta, por processo
+LINHAS_POR_TAREFA = 100_000  # cliques por tarefa entregue a um processo
+TENTATIVAS = 5  # envios de um lote recusado antes de desistir
 
 
 def ler_base() -> Base:
@@ -73,6 +79,8 @@ def tarefas(base: Base) -> list[list[Bloco]]:
 
 
 class Progresso:
+    """Mostra o andamento da carga de um banco a cada 10 s."""
+
     def __init__(self, rotulo: str, total: int) -> None:
         self.rotulo, self.total = rotulo, total
         self.feito = 0
@@ -128,7 +136,8 @@ def carregar_redis(base: Base) -> None:
         p.execute()
         return len(fatia)
 
-    # Concorrência limitada: 4 conexões, 500 links (1.500 comandos) por pipeline.
+    # 4 conexões, cada uma enviando 500 links por vez: 1.500 comandos num só
+    # pipeline, sem esperar a resposta de cada comando.
     fatias = [links[i : i + 500] for i in range(0, len(links), 500)]
     with ThreadPoolExecutor(max_workers=4) as executor:
         total = sum(executor.map(gravar, fatias))
@@ -137,6 +146,7 @@ def carregar_redis(base: Base) -> None:
 
 # --- Cassandra ---------------------------------------------------------------
 
+# Uma sessão e uma inserção preparada por processo, abertas por _iniciar_cassandra.
 _sessao = None
 _insercao = None
 
@@ -151,10 +161,16 @@ def _iniciar_cassandra() -> None:
         "(short_code, clicado_em, clique_id, pais, dispositivo, referrer) "
         "VALUES (?, ?, ?, ?, ?, ?)"
     )
-    _insercao.is_idempotent = True  # a mesma linha, com a mesma chave, pode ser reenviada
+    # Reenviar a mesma linha, com a mesma chave, só a regrava igual; marcada
+    # assim, o driver pode repeti-la depois de um erro.
+    _insercao.is_idempotent = True
 
 
 def _lotes(base: Base, blocos: list[Bloco]):
+    """Agrupa os cliques em lotes de até LINHAS_POR_LOTE_CASSANDRA linhas.
+
+    Um bloco é sempre de um só link, então cada lote fica numa única partição.
+    """
     for bloco in blocos:
         lote, linhas = None, 0
         for clique in base.cliques(bloco):
@@ -170,6 +186,11 @@ def _lotes(base: Base, blocos: list[Bloco]):
 
 
 def _tarefa_cassandra(argumentos: tuple[Base, list[Bloco]]) -> int:
+    """Envia os lotes de uma tarefa sem esperar cada resposta.
+
+    No máximo LOTES_EM_ANDAMENTO ficam pendentes. Um lote recusado é reenviado
+    até TENTATIVAS vezes, com espera crescente.
+    """
     base, blocos = argumentos
     vagas = threading.BoundedSemaphore(LOTES_EM_ANDAMENTO)
     erros: list[BaseException] = []
@@ -193,6 +214,7 @@ def _tarefa_cassandra(argumentos: tuple[Base, list[Bloco]]) -> int:
         vagas.acquire()
         enviar(lote, 1)
         linhas += n
+    # Pegar todas as vagas é esperar os lotes que ainda estão em andamento.
     for _ in range(LOTES_EM_ANDAMENTO):
         vagas.acquire()
     if erros:
@@ -217,8 +239,11 @@ def carregar_cassandra(base: Base, processos: int) -> float:
 def esperar_compactacoes(limite_s: int = 1800, quieto_s: int = 30) -> float:
     """Espera as compactações acabarem, para não rodarem durante as medições.
 
-    Usa as tabelas virtuais por CQL: o nodetool abriria outra JVM dentro do
-    teto de memória do contêiner do Cassandra.
+    Depois de receber as linhas, o Cassandra junta em segundo plano os arquivos
+    que gravou no disco (compactação). A espera termina quando nada roda há
+    `quieto_s` segundos. Consulta as tabelas de sistema pela linguagem do
+    Cassandra (CQL), porque a ferramenta nodetool abriria outro processo Java
+    dentro do teto de memória do contêiner do Cassandra.
     """
     cluster = Cluster(["cassandra"], protocol_version=5)
     sessao = cluster.connect()
@@ -250,6 +275,7 @@ def esperar_compactacoes(limite_s: int = 1800, quieto_s: int = 30) -> float:
 
 
 def _tarefa_postgres(argumentos: tuple[Base, list[Bloco]]) -> int:
+    """Grava os cliques de uma tarefa com um só COPY."""
     base, blocos = argumentos
     linhas = 0
     with conectar_postgres() as conexao, conexao.cursor() as cursor:
@@ -291,6 +317,9 @@ def carregar_postgres(base: Base, processos: int) -> float:
             progresso.somar(linhas)
     segundos = progresso.segundos()
 
+    # VACUUM (ANALYZE) faz a manutenção e atualiza as estatísticas das tabelas;
+    # CHECKPOINT grava no disco o que estava pendente. O VACUUM não roda dentro
+    # de uma transação, daí a conexão com autocommit.
     inicio = time.monotonic()
     with psycopg.connect(
         host="postgres",
