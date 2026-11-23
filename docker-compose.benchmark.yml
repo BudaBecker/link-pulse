@@ -34,6 +34,8 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-linkpulse}
     volumes:
       - ./benchmark:/linkpulse/benchmark:ro
+      # Manifesto da base carregada, gravado pelo benchmark/base.py.
+      - manifesto-benchmark:/linkpulse/manifesto:ro
     depends_on:
       redis-replica:
         condition: service_healthy
@@ -51,3 +53,7 @@ volumes:
     name: linkpulse-benchmark-cassandra
   postgres-benchmark:
     name: linkpulse-benchmark-postgres
+  manifesto-benchmark:
+    # Criado e gravado só pelo benchmark/base.py, na carga e na restauração.
+    name: linkpulse-benchmark-manifesto
+    external: true

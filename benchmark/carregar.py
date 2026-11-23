@@ -2,7 +2,8 @@
 
 Roda no contêiner `carga`, com as bibliotecas fixadas; quem o chama é
 `python benchmark/base.py carregar`, que antes recria os volumes de benchmark.
-Os parâmetros vêm do manifesto benchmark/base-de-referencia.json.
+Os parâmetros vêm do manifesto da base, que o base.py grava no volume
+linkpulse-benchmark-manifesto antes da carga.
 
 - Redis: Hash `cliente:{id}` (fora do Set `clientes`), Hash `link:{short_code}`,
   Set `links:cliente:{id}` e `contador:{short_code}` com o total de cliques.
@@ -36,7 +37,8 @@ from cassandra.query import BatchStatement, BatchType
 
 from referencia import Base, Bloco, ms_para_datetime, iso
 
-MANIFESTO = Path(__file__).with_name("base-de-referencia.json")
+# Manifesto vinculado aos volumes de benchmark (volume linkpulse-benchmark-manifesto).
+MANIFESTO = Path("/linkpulse/manifesto/base-de-referencia.json")
 LINHAS_POR_LOTE_CASSANDRA = 30  # cerca de 3 KiB, abaixo do aviso de 5 KiB do Cassandra
 LOTES_EM_ANDAMENTO = 16  # por processo
 LINHAS_POR_TAREFA = 100_000

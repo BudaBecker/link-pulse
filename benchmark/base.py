@@ -8,8 +8,9 @@ que usa volumes próprios do benchmark (linkpulse-benchmark-*).
     python benchmark/base.py restaurar    # volta os bancos à cópia guardada e confere o CA-1
     python benchmark/base.py conferir [--completo]
     python benchmark/base.py copiar       # guarda de novo a cópia do estado atual
-    python benchmark/base.py manifesto    # só reescreve benchmark/base-de-referencia.json
+    python benchmark/base.py manifesto    # só reescreve o espelho benchmark/base-de-referencia.json
 
+Um comando por vez: todos, menos `manifesto`, pegam a trava benchmark/.base.trava.
 Detalhes em benchmark/README.md.
 """
 
@@ -17,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -53,6 +55,13 @@ ROTULO_PAPEL = "linkpulse.benchmark.papel"
 SELO = "selo"
 # Cópias do formato anterior, sem geração; são apagadas na próxima cópia.
 COPIAS_ANTIGAS = [f"linkpulse-benchmark-copia-{banco}" for banco in BANCOS]
+# Manifesto da base que está nos volumes de benchmark. Só a carga e a
+# restauração o gravam; a carga e a conferência o leem dali. O arquivo
+# benchmark/base-de-referencia.json é um espelho para leitura e para o Git.
+VOLUME_MANIFESTO = "linkpulse-benchmark-manifesto"
+ARQUIVO_MANIFESTO = "base-de-referencia.json"
+CHAVES_MANIFESTO = {"semente", "fim", "links", "cliques", "link_popular", "dispositivos", "assinatura_cliques"}
+TRAVA = Path(__file__).with_name(".base.trava")
 COMPARADOS = ("redis-master", "cassandra", "postgres")
 # Imagem já usada pelo ambiente, para copiar os volumes sem baixar outra.
 IMAGEM_AUXILIAR = "redis:8.2.11-bookworm"
@@ -76,6 +85,115 @@ def conteiner(servico: str) -> str:
     if not identificador:
         sys.exit(f"serviço {servico} não está no ar")
     return identificador
+
+
+class Trava:
+    """Um comando por vez sobre a base de benchmark.
+
+    Copiar e restaurar deixam os bancos parados enquanto trocam os volumes; outro
+    comando no meio poderia religá-los. A trava é do sistema operacional e se
+    solta sozinha se o processo morrer.
+    """
+
+    POSICAO = 1 << 20  # trava um byte longe do texto, que continua legível
+
+    def __init__(self, comando: str) -> None:
+        self.comando = comando
+
+    def __enter__(self) -> "Trava":
+        self.arquivo = open(TRAVA, "a+b")
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                self.arquivo.seek(self.POSICAO)
+                msvcrt.locking(self.arquivo.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(self.arquivo.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            self.arquivo.seek(0)
+            dono = self.arquivo.read(200).decode("utf-8", "replace").strip()
+            self.arquivo.close()
+            sys.exit(f"outro comando da base está rodando ({dono or 'sem detalhes'}); espere ele terminar")
+        self.arquivo.truncate(0)
+        self.arquivo.write(f"{self.comando}, pid {os.getpid()}, desde {datetime.now():%H:%M:%S}".encode())
+        self.arquivo.flush()
+        return self
+
+    def __exit__(self, *_) -> None:
+        if os.name == "nt":
+            import msvcrt
+
+            self.arquivo.seek(self.POSICAO)
+            msvcrt.locking(self.arquivo.fileno(), msvcrt.LK_UNLCK, 1)
+        self.arquivo.close()
+
+
+def ler_do_volume(volume: str) -> str | None:
+    resultado = subprocess.run(
+        ["docker", "run", "--rm", "-v", f"{volume}:/v:ro", "--entrypoint", "cat", IMAGEM_AUXILIAR,
+         f"/v/{ARQUIVO_MANIFESTO}"],
+        capture_output=True, text=True, encoding="utf-8",
+    )
+    return resultado.stdout if resultado.returncode == 0 else None
+
+
+def gravar_no_volume(volume: str, texto: str) -> None:
+    # Grava num temporário e renomeia: o arquivo aparece inteiro ou não aparece.
+    temporario = f"/v/.{ARQUIVO_MANIFESTO}.tmp"
+    subprocess.run(
+        ["docker", "run", "--rm", "-i", "-v", f"{volume}:/v", "--entrypoint", "sh", IMAGEM_AUXILIAR,
+         "-c", f"cat > {temporario} && mv {temporario} /v/{ARQUIVO_MANIFESTO}"],
+        input=texto, text=True, encoding="utf-8", check=True,
+    )
+
+
+def interpretar_manifesto(texto: str | None) -> dict | None:
+    try:
+        dados = json.loads(texto or "")
+    except ValueError:
+        return None
+    return dados if isinstance(dados, dict) and CHAVES_MANIFESTO <= dados.keys() else None
+
+
+def manifesto_da_base() -> str:
+    """Texto do manifesto vinculado aos volumes de benchmark."""
+    texto = ler_do_volume(VOLUME_MANIFESTO) if volume_existe(VOLUME_MANIFESTO) else None
+    if interpretar_manifesto(texto) is None:
+        sys.exit(f"a base de benchmark não tem manifesto válido em {VOLUME_MANIFESTO}; "
+                 "rode carregar, ou restaurar para repor a cópia")
+    return texto
+
+
+def gravar_manifesto_da_base(texto: str) -> None:
+    if not volume_existe(VOLUME_MANIFESTO):
+        rodar(["docker", "volume", "create", "--label", "linkpulse.benchmark=manifesto", VOLUME_MANIFESTO],
+              capturar=True)
+    gravar_no_volume(VOLUME_MANIFESTO, texto)
+
+
+def espelho_difere(texto: str) -> bool:
+    # Compara só o texto: um espelho corrompido não pode interromper a restauração.
+    try:
+        return MANIFESTO.read_text(encoding="utf-8", errors="replace") != texto
+    except OSError:
+        return True
+
+
+def espelhar_manifesto(texto: str) -> bool:
+    if not espelho_difere(texto):
+        return False
+    MANIFESTO.write_text(texto, encoding="utf-8")
+    return True
+
+
+def exigir_bancos_no_ar() -> None:
+    parados = [b for b in BANCOS if not compose("ps", "-q", b, capturar=True).strip()]
+    if parados:
+        sys.exit(f"bancos parados ({', '.join(parados)}); a conferência não liga bancos. "
+                 "Suba-os com python benchmark/base.py restaurar")
 
 
 def exigir_volumes_de_benchmark() -> None:
@@ -116,11 +234,20 @@ def geracoes() -> dict[str, dict[str, str]]:
     return resultado
 
 
-def copia_valida() -> tuple[str, dict[str, str]] | None:
-    """A geração selada mais recente, com os quatro bancos."""
+def copia_valida() -> tuple[str, dict[str, str], str] | None:
+    """A geração mais recente com os quatro bancos e um selo íntegro.
+
+    Devolve a geração, os volumes e o texto do manifesto guardado no selo. Um
+    selo ausente, vazio ou inválido faz a escolha passar para a geração anterior.
+    """
     for geracao, volumes in sorted(geracoes().items(), reverse=True):
-        if SELO in volumes and all(banco in volumes for banco in BANCOS):
-            return geracao, volumes
+        if not all(banco in volumes for banco in BANCOS) or SELO not in volumes:
+            continue
+        texto = ler_do_volume(volumes[SELO])
+        if interpretar_manifesto(texto) is None:
+            print(f"  aviso: a cópia {geracao} tem selo incompleto e foi ignorada", file=sys.stderr)
+            continue
+        return geracao, volumes, texto
     return None
 
 
@@ -136,12 +263,6 @@ def remover_volumes(nomes) -> int:
             rodar(["docker", "volume", "rm", nome], capturar=True)
             removidos += 1
     return removidos
-
-
-def ler_selo(volume: str) -> dict:
-    texto = rodar(["docker", "run", "--rm", "-v", f"{volume}:/selo:ro", "--entrypoint", "cat",
-                   IMAGEM_AUXILIAR, "/selo/base-de-referencia.json"], capturar=True)
-    return json.loads(texto)
 
 
 def subir() -> float:
@@ -250,19 +371,21 @@ def cmd_manifesto(semente: int, fim: str, processos: int) -> dict:
 
 def cmd_conferir(completo: bool) -> float:
     exigir_volumes_de_benchmark()
-    valida = copia_valida()
-    if valida is not None and ler_selo(valida[1][SELO]) != json.loads(MANIFESTO.read_text(encoding="utf-8")):
-        print(f"Aviso: o manifesto difere do guardado na cópia {valida[0]}; "
-              "se a base no ar for a da cópia, restaure para repor o manifesto.", file=sys.stderr)
+    exigir_bancos_no_ar()
+    if espelho_difere(manifesto_da_base()):
+        print(f"Aviso: {MANIFESTO.relative_to(RAIZ)} difere do manifesto da base ({VOLUME_MANIFESTO}); "
+              "a conferência usa o da base.", file=sys.stderr)
     inicio = time.monotonic()
-    argumentos = ["run", "--rm", "carga", "python", "benchmark/conferir.py"]
+    # --no-deps: a conferência nunca liga bancos, nem no meio de outra operação.
+    argumentos = ["run", "--rm", "--no-deps", "carga", "python", "benchmark/conferir.py"]
     compose(*argumentos, *(["--completo"] if completo else []))
     return time.monotonic() - inicio
 
 
 def cmd_copiar() -> dict:
     exigir_volumes_de_benchmark()
-    manifesto = MANIFESTO.read_text(encoding="utf-8")
+    # O selo leva o manifesto vinculado aos volumes, não o espelho local.
+    manifesto = manifesto_da_base()
     print("Cópia da base: gravando o RDB do Redis e parando os bancos")
     for servico in ("redis-master", "redis-replica"):
         rodar(["docker", "exec", conteiner(servico), "redis-cli", "SAVE"])
@@ -286,11 +409,7 @@ def cmd_copiar() -> dict:
             criar_volume(volume, geracao, banco)
         copia_s = copiar_volumes(VOLUMES, novas)
         criar_volume(selo, geracao, SELO)
-        subprocess.run(
-            ["docker", "run", "--rm", "-i", "-v", f"{selo}:/selo", "--entrypoint", "sh", IMAGEM_AUXILIAR,
-             "-c", "cat > /selo/base-de-referencia.json"],
-            input=manifesto, text=True, encoding="utf-8", check=True,
-        )
+        gravar_no_volume(selo, manifesto)
     except BaseException:
         print("  a cópia falhou; a geração incompleta foi apagada e a cópia anterior continua valendo",
               file=sys.stderr)
@@ -310,24 +429,29 @@ def cmd_restaurar(conferir: bool) -> dict:
     exigir_volumes_de_benchmark()
     valida = copia_valida()
     if valida is None:
-        sys.exit("nenhuma cópia selada; rode antes: python benchmark/base.py carregar")
-    geracao, volumes = valida
-    manifesto_copia = ler_selo(volumes[SELO])
+        sys.exit("nenhuma cópia selada e íntegra; rode antes: python benchmark/base.py carregar")
+    geracao, volumes, manifesto = valida
     print(f"Restauração da base (cópia {geracao})")
     inicio = time.monotonic()
     # O estado atual é descartado, então os bancos não precisam de parada normal.
     compose("kill", *BANCOS)
     parada = time.monotonic() - inicio
-    copia = copiar_volumes({b: volumes[b] for b in BANCOS}, VOLUMES)
-    # Os volumes e o manifesto voltam juntos: a janela do histórico e o link
-    # popular passam a ser os da base copiada.
-    atual = json.loads(MANIFESTO.read_text(encoding="utf-8")) if MANIFESTO.exists() else None
-    reposto = atual != manifesto_copia
-    if reposto:
-        MANIFESTO.write_text(json.dumps(manifesto_copia, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-        print(f"  manifesto reposto pelo da cópia (semente {manifesto_copia['semente']}, "
-              f"fim {manifesto_copia['fim']}); o anterior descrevia outra base")
-    subida = subir()
+    try:
+        copia = copiar_volumes({b: volumes[b] for b in BANCOS}, VOLUMES)
+    except subprocess.CalledProcessError:
+        print("  a reposição dos volumes falhou; os bancos ficam parados para não subir com dados pela "
+              "metade. Rode restaurar de novo.", file=sys.stderr)
+        raise
+    # Com os volumes repostos, os bancos sempre voltam, mesmo se o manifesto falhar.
+    try:
+        # Volumes e manifesto voltam juntos: a janela do histórico e o link
+        # popular passam a ser os da base copiada.
+        gravar_manifesto_da_base(manifesto)
+        reposto = espelhar_manifesto(manifesto)
+        if reposto:
+            print(f"  espelho {MANIFESTO.relative_to(RAIZ)} reposto pelo manifesto da cópia")
+    finally:
+        subida = subir()
     total = time.monotonic() - inicio
     print(f"  pronto para uso em {total:.0f} s (parada {parada:.0f} s, cópia {copia:.0f} s, subida {subida:.0f} s)")
     dados = {"geracao": geracao, "manifesto_reposto": reposto, "parada_s": round(parada, 1),
@@ -339,18 +463,19 @@ def cmd_restaurar(conferir: bool) -> dict:
 
 def cmd_carregar(semente: int, fim: str, processos: int) -> dict:
     manifesto = cmd_manifesto(semente, fim, processos)
-    print("Recriando os volumes de benchmark vazios: " + ", ".join(VOLUMES.values()))
+    print("Recriando os volumes de benchmark vazios: " + ", ".join([*VOLUMES.values(), VOLUME_MANIFESTO]))
     compose("rm", "--stop", "--force", *BANCOS, "cassandra-esquema")
-    for volume in VOLUMES.values():
-        if volume_existe(volume):
-            rodar(["docker", "volume", "rm", volume], capturar=True)
+    remover_volumes([*VOLUMES.values(), VOLUME_MANIFESTO])
+    # O manifesto fica vinculado aos volumes desde a carga.
+    gravar_manifesto_da_base(MANIFESTO.read_text(encoding="utf-8"))
     subida = subir()
     print(f"  bancos no ar em {subida:.0f} s")
 
     inicio = time.monotonic()
     with MonitorMemoria() as monitor:
         try:
-            compose("run", "--rm", "carga", "python", "benchmark/carregar.py", "--processos", str(processos))
+            compose("run", "--rm", "--no-deps", "carga", "python", "benchmark/carregar.py",
+                    "--processos", str(processos))
         finally:
             carga = time.monotonic() - inicio
             memoria = monitor.relatorio()
@@ -381,7 +506,11 @@ def main() -> int:
     p.add_argument("--completo", action="store_true")
     args = parser.parse_args()
     try:
-        executar(args)
+        if args.comando == "manifesto":
+            executar(args)
+        else:
+            with Trava(args.comando):
+                executar(args)
     except subprocess.CalledProcessError as erro:
         print(f"\nFalhou ({erro.returncode}): {' '.join(erro.cmd)}", file=sys.stderr)
         return 1

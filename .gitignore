@@ -20,6 +20,7 @@ docker-compose.override.yml
 
 # Registros das cargas e restaurações da base do benchmark
 benchmark/registros/
+benchmark/.base.trava
 
 # Editores e sistema operacional
 .idea/
