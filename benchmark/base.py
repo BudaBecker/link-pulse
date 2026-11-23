@@ -152,7 +152,9 @@ def esperar_auxiliares() -> None:
     Um auxiliar criado e ainda não iniciado (estado `created`) também pode ter
     ficado para trás, e o cliente do Docker do comando morto ainda conseguiria
     iniciá-lo no meio desta operação. Como nenhum comando vivo vai iniciá-lo,
-    ele é removido. Os que já estão rodando são esperados.
+    ele é removido. A remoção é sem `-f`: se ele começar a rodar entre a
+    listagem e a remoção, o Docker recusa, e ele passa a ser esperado como os
+    que já estão rodando, sem ser interrompido no meio da escrita.
     """
     avisado = False
     while True:
@@ -161,7 +163,7 @@ def esperar_auxiliares() -> None:
         if criados:
             print(f"Removendo {len(criados)} contêiner(es) criados e não iniciados por um comando anterior",
                   file=sys.stderr)
-            subprocess.run(["docker", "rm", "-f", *criados], capture_output=True)
+            subprocess.run(["docker", "rm", *criados], capture_output=True)
         ids = rodar(["docker", "ps", "-q", "--filter", f"label={ROTULO_AUXILIAR}"], capturar=True).split()
         if not ids:
             if criados:

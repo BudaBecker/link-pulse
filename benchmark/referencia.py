@@ -133,7 +133,7 @@ def validar_fim(texto: str) -> str:
     """
     try:
         momento = _ler_instante(texto)
-    except (TypeError, ValueError, AttributeError) as erro:
+    except (TypeError, ValueError, AttributeError, OverflowError) as erro:
         raise ValueError(f"instante final inválido ({texto}): use ISO 8601 com fuso, como {FIM_PADRAO}") from erro
     if not FIM_MINIMO <= momento <= FIM_MAXIMO:
         raise ValueError(f"instante final fora do intervalo aceito, de 2000 a 2100: {texto}")
