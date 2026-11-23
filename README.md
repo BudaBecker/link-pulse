@@ -29,7 +29,7 @@ Justificativa completa em [ARQUITETURA](docs/arquitetura/ARQUITETURA.md); fluxos
 
 - Marco 1 concluído: documentação de modelagem e justificativa; checklist da disciplina em [DISCIPLINA](docs/produto/DISCIPLINA.md).
 - Marco 2 em andamento, com apresentação em 25/11/2026. O resultado principal é um benchmark SQL x NoSQL: as operações do produto medidas no Redis e no Cassandra e, como base de comparação, no PostgreSQL ([ADR-0012](docs/decisoes/ADR-0012-marco-2-benchmark-sql-x-nosql.md)).
-- A aplicação e os testes rodam em Python + FastAPI, com Redis, Cassandra, PostgreSQL e MongoDB via Docker Compose ([ADR-0013](docs/decisoes/ADR-0013-stack-e-ambiente-do-marco-2.md)). Ainda não há código: as specs estão em [docs/specs/](docs/specs/README.md).
+- A aplicação e os testes rodam em Python + FastAPI, com Redis, Cassandra, PostgreSQL e MongoDB via Docker Compose ([ADR-0013](docs/decisoes/ADR-0013-stack-e-ambiente-do-marco-2.md)). O ambiente local sobe com `docker compose up -d --wait` ([infra/](infra/README.md)); a aplicação e o benchmark seguem as specs em [docs/specs/](docs/specs/README.md).
 - Questões adiadas em [QUESTOES](docs/requisitos/QUESTOES.md).
 
 ## Documentação
