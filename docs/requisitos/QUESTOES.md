@@ -12,7 +12,9 @@ A coluna "Proposta" é só uma sugestão para acelerar a decisão; ela não vale
 
 ## Abertas
 
-Nenhuma.
+| ID | Tipo | Questão | Origem | Afeta | Proposta (não aprovada) |
+| --- | --- | --- | --- | --- | --- |
+| Q-38 | Lacuna | O teto de 2 CPUs é uma cota de tempo de CPU, e o contêiner continua vendo as 24 CPUs da máquina. O script de partida do Cassandra calcula as threads de GC por esse número (`-XX:ParallelGCThreads=24`), e as pausas de GC podem ficar mais longas sob a cota só nesse lado. Como aplicar o teto de CPU sem penalizar um dos bancos? | [ADR-0013](../decisoes/ADR-0013-stack-e-ambiente-do-marco-2.md) §Ambiente; medição do ambiente em [infra/README.md](../../infra/README.md#consumo-de-memória-medido) | RNF-08 | Decidir depois de medir na máquina dedicada da apresentação, com os dados de referência carregados e os outros programas fechados: uso de CPU e pausas de GC do Cassandra sob carga. Se as pausas pesarem, trocar a cota por `cpuset` com 2 núcleos fixos e distintos em cada banco comparado: o teto continua de 2 CPUs, a configuração dos bancos continua a padrão, e o Cassandra calcula as threads pelas CPUs que de fato tem |
 
 ## Adiadas (pós-Marco 2)
 
