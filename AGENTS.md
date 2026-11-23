@@ -12,6 +12,10 @@ O Marco 1 entrega só documentação: descrição do problema, modelagem e justi
 
 O benchmark e a base de referência (`benchmark/`) rodam sempre em ambiente controlado: uma máquina, uma pessoa operando e um comando por vez. As proteções que já existem bastam: a trava dos comandos da base, a recusa a mexer nos volumes de desenvolvimento, a cópia selada e a conferência da base depois de carregar ou restaurar. Não acrescente outra camada de travas, novas tentativas automáticas nem tratamento ou testes para combinações improváveis de falhas, como dois operadores ao mesmo tempo, disco cheio no meio da cópia ou datas extremas. Uma falha nesses casos pode ser resolvida rodando de novo `python benchmark/base.py restaurar`, ou `carregar`.
 
+## Comentários no código
+
+Mantenha comentários e docstrings curtos, inclusive em configurações e esquemas. Comente o motivo de uma escolha quando ele não for evidente no código. Coloque tutoriais, conceitos e instruções de uso no README da área ou no [guia do projeto](docs/GUIA.md). Registre decisões de arquitetura nos ADRs.
+
 ## Onde está cada coisa
 
 | Preciso de... | Leia |

@@ -1,17 +1,4 @@
-"""Confere o ambiente local do LinkPulse.
-
-O docker-compose.yml sobe os bancos do projeto: Redis (master e réplica),
-Cassandra, PostgreSQL e MongoDB. Este script confere se eles estão como as
-decisões de stack e de modelo de dados pedem (docs/decisoes/ADR-0013 e
-ADR-0014): a réplica do Redis ligada e a gravação em disco no padrão, o
-esquema do Cassandra com a chave e a ordem certas, as tabelas do PostgreSQL sem
-chave estrangeira nem índices extras, e o MongoDB respondendo.
-
-Roda no serviço `verificar`, com as bibliotecas fixadas:
-    docker compose run --rm verificar
-Mostra cada conferência com [ok] ou [FALHA] e sai com código 1 se alguma
-falhar.
-"""
+"""Confere a configuração dos bancos e os esquemas do ambiente local."""
 
 import os
 import sys
@@ -41,8 +28,6 @@ def conferir_redis() -> None:
     print(f"  versão {info_master['redis_version']}")
     conferir(info_master["role"] == "master", "redis-master tem o papel master")
     conferir(info_master["connected_slaves"] >= 1, "master com ao menos 1 réplica conectada")
-    # Padrão da imagem: sem o registro de cada escrita (AOF), só as fotografias
-    # periódicas da memória (RDB).
     conferir(info_master["aof_enabled"] == 0, "AOF desligado no master")
     conferir(master.config_get("save")["save"] != "", "fotografias RDB ligadas no master")
 
@@ -50,7 +35,6 @@ def conferir_redis() -> None:
     conferir(info_replica["role"] == "slave", "redis-replica tem o papel de réplica")
     conferir(info_replica["master_link_status"] == "up", "réplica ligada ao master")
 
-    # Uma escrita de teste no master tem de aparecer na réplica em até 2 s.
     chave = f"verificacao:{uuid.uuid4()}"
     master.set(chave, "1", ex=60)
     replicado = False

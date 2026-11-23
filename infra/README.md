@@ -43,6 +43,8 @@ Os três bancos comparados (Redis master, Cassandra e PostgreSQL) usam o mesmo b
 - Python 3.13.18 (`python:3.13.18-slim-bookworm`).
 - Bibliotecas em [requirements.txt](../requirements.txt): FastAPI 0.165.0, uvicorn 0.54.0, redis-py 8.2.0, cassandra-driver 3.30.1, psycopg 3.3.9, pymongo 4.20.1.
 
+Os serviços `verificar` e `carga` usam a mesma imagem Python. O script de verificação é copiado para a imagem durante o build. O serviço `carga` lê os scripts da pasta `benchmark/` montada em modo de leitura.
+
 ## Consumo de memória medido
 
 Medido em 23/11/2026 com `docker stats`, com os bancos sem dados e outras aplicações abertas no computador (editor, navegador, vídeo). A máquina virtual (VM) do Docker tinha 7,6 GiB e 24 CPUs. Os valores se repetiram em duas subidas, uma com os volumes vazios e outra com os volumes já criados. São uma referência de desenvolvimento: a medição de desempenho vale na máquina dedicada da apresentação, com os dados de referência carregados.

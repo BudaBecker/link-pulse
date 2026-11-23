@@ -1,10 +1,3 @@
-# Bibliotecas Python do LinkPulse, com a versão exata fixada para que todos
-# rodem o mesmo código (decisão de stack em docs/decisoes/ADR-0013).
-# São instaladas na imagem do Dockerfile, com Python 3.13.18, e usadas pelos
-# scripts que rodam em contêiner. O benchmark/base.py roda fora dos
-# contêineres e só usa a biblioteca padrão. fastapi e uvicorn servem à
-# aplicação web, ainda a implementar (docs/specs/SPEC-004); as demais são os
-# clientes dos quatro bancos.
 fastapi==0.165.0
 uvicorn==0.54.0
 redis==8.2.0

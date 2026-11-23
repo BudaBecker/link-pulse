@@ -1,13 +1,4 @@
--- Esquema do PostgreSQL no LinkPulse, usado só pelo benchmark SQL x NoSQL.
---
--- O PostgreSQL é a base de comparação: estas tabelas guardam os mesmos links,
--- contadores e cliques que o Redis e o Cassandra, para as mesmas operações
--- serem medidas nos dois lados (docs/decisoes/ADR-0014). A imagem oficial roda
--- este arquivo só na primeira subida, com o volume vazio (docker-compose.yml).
---
--- Sem chave estrangeira e sem índice além das chaves primárias: o Redis e o
--- Cassandra não conferem se o link existe nem mantêm índices extras, e o
--- PostgreSQL não deve fazer trabalho a mais que o outro lado.
+-- Sem chave estrangeira nem índices além das chaves primárias (ADR-0014).
 
 CREATE TABLE links (
   short_code  text PRIMARY KEY,
@@ -23,8 +14,6 @@ CREATE TABLE contadores (
   total       bigint NOT NULL DEFAULT 0
 );
 
--- A chave primária composta serve à consulta por período, como a partição
--- ordenada do Cassandra.
 CREATE TABLE cliques (
   short_code   text NOT NULL,
   clicado_em   timestamptz NOT NULL,
