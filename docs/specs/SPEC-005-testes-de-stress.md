@@ -22,7 +22,9 @@ O método, o modelo do lado PostgreSQL e os dados carregados estão no [ADR-0014
 
 ### Carga de dados
 
-Antes dos testes, um comando carrega os mesmos clientes, links e cliques no lado NoSQL (Redis e Cassandra) e no PostgreSQL. A geração é determinística: a mesma semente produz os mesmos dados.
+Antes dos testes, um comando carrega os mesmos clientes, links e cliques no lado NoSQL (Redis e Cassandra) e no PostgreSQL. A geração é determinística: a mesma semente produz os mesmos dados. O `dispositivo` dos cliques carregados segue uma distribuição fixa: 60% `mobile`, 30% `desktop`, 5% `tablet` e 5% `outro`.
+
+Depois da carga, uma cópia dos volumes de dados do Redis, do Cassandra e do PostgreSQL fica guardada (Q-35). Restaurar a cópia significa parar os contêineres desses bancos, trocar os volumes pela cópia e religá-los. Apagar as linhas acrescentadas não serve: no Cassandra, a exclusão deixa marcas (*tombstones*) que deixariam as leituras seguintes mais lentas só nesse lado.
 
 ### Sequência de testes
 
@@ -36,7 +38,8 @@ Antes dos testes, um comando carrega os mesmos clientes, links e cliques no lado
 | 6 | Queda do Cassandra | 200 redirecionamentos por segundo pela aplicação; o Cassandra para aos 30 s e volta aos 60 s | 90 s |
 
 - **Ao vivo:** a sequência roda uma vez, em até 480 s. Cada etapa divide o seu tempo por igual entre as execuções que contém.
-- **Execução completa:** nas etapas 1 a 5, cada lado roda 60 s depois de 10 s de aquecimento descartados; a curva extra entra nas etapas 2 e 3. A sequência repete 3 vezes e o resultado é a mediana.
+- **Execução completa:** nas etapas 1 a 5, cada lado roda 60 s depois de 10 s de aquecimento descartados; a curva extra entra nas etapas 2 e 3. A sequência inteira, incluindo a queda do Cassandra, repete 3 vezes (Q-36). Nas etapas 1 a 5, o resultado é a mediana; na queda, as 3 execuções são publicadas e todas precisam cumprir o CA-6.
+- **Estado dos dados:** a cópia é restaurada antes de cada repetição e antes do histórico por período, a única leitura afetada pelas linhas que o registro de clique acrescenta. A execução ao vivo parte da cópia restaurada e não restaura no meio, porque só ilustra.
 - **Calibração:** antes da primeira execução completa, o gerador testa 8, 32 e 64 conexões e registra o número escolhido e o seu uso de CPU.
 
 ### Métricas
@@ -54,7 +57,7 @@ Para cada execução: vazão (operações por segundo), latência p50, p95 e p99
 
 ## Plano de implementação
 
-1. Esquema do PostgreSQL e carga de dados nos dois lados.
+1. Esquema do PostgreSQL, carga de dados nos dois lados e cópia dos volumes para restauração.
 2. Gerador de carga em laço fechado para as quatro operações, com a coleta de métricas.
 3. Calibração e registro do resultado; troca da linguagem do laço de disparo, se a regra do [ADR-0013](../decisoes/ADR-0013-stack-e-ambiente-do-marco-2.md) indicar.
 4. Cenário de pico.
@@ -64,11 +67,11 @@ Para cada execução: vazão (operações por segundo), latência p50, p95 e p99
 
 ## Critérios de aceitação
 
-- [ ] **CA-1** (RNF-08) — Depois da carga, a contagem de links e de cliques é igual no lado NoSQL e no PostgreSQL, e o link popular tem 20% dos cliques nos dois.
+- [ ] **CA-1** (RNF-08) — Depois da carga e depois de cada restauração da cópia, a contagem de links e de cliques é igual no lado NoSQL e no PostgreSQL, e o link popular tem 20% dos cliques nos dois.
 - [ ] **CA-2** (RF-10) — Para cada uma das quatro operações, a execução produz vazão, p50, p95, p99 e taxa de erro dos dois lados.
 - [ ] **CA-3** (RNF-08) — Em cada etapa, os dois lados rodam um de cada vez, com o mesmo número de conexões e os mesmos tetos de CPU e memória; o uso de CPU do gerador fica registrado e abaixo de 70% do seu limite.
-- [ ] **CA-4** (RF-10) — A execução completa repete a sequência 3 vezes, descarta os 10 s de aquecimento e publica a mediana; a curva extra aparece nas duas escritas, separada da execução padrão.
+- [ ] **CA-4** (RF-10, RNF-08) — A execução completa repete a sequência inteira 3 vezes, restaura a cópia antes de cada repetição e antes do histórico por período, descarta os 10 s de aquecimento e publica a mediana das etapas 1 a 5; a curva extra aparece nas duas escritas, separada da execução padrão.
 - [ ] **CA-5** (RNF-04) — No cenário de pico, a taxa de erro das três operações no lado NoSQL é zero.
-- [ ] **CA-6** (RNF-01, RNF-02, RN-07) — No cenário de queda, enquanto o Cassandra está parado, os redirecionamentos continuam respondendo `302` com p95 abaixo de 50 ms; o contador continua somando, e os cliques que falharam aparecem na tela.
+- [ ] **CA-6** (RNF-01, RNF-02, RN-07) — No cenário de queda, em cada uma das 3 execuções da execução completa e enquanto o Cassandra está parado, os redirecionamentos continuam respondendo `302` com p95 abaixo de 50 ms; o contador continua somando, e os cliques que falharam aparecem na tela.
 - [ ] **CA-7** (RF-11) — A tela inicia a sequência com um botão, mostra a etapa atual, as curvas sobrepostas e o placar, e conclui a execução ao vivo em até 480 s.
 - [ ] **CA-8** (RF-11) — Com a rede desligada, a tela carrega com os gráficos e abre a execução salva, identificada como gravada.

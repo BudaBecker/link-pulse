@@ -52,7 +52,7 @@ Os dados e as chaves estão em [ARQUITETURA](../arquitetura/ARQUITETURA.md) Pass
 3. Se o link não existe no master, responde `404`. Se `expira_em` está no passado, responde `410` com a página de expiração. Nos dois casos, não soma no contador nem grava evento.
 4. Caso contrário, responde `302` com `Location: {url}`.
 5. Depois da resposta, executa `INCR contador:{short_code}` no master e grava o evento em `cliques_por_link`, de forma assíncrona e com tempo limite curto.
-6. O evento leva `short_code`, `clicado_em`, `clique_id`, `dispositivo` (derivado do cabeçalho `User-Agent`) e `referrer`. O campo `pais` fica vazio.
+6. O evento leva `short_code`, `clicado_em`, `clique_id`, `dispositivo` (derivado do cabeçalho `User-Agent`: `mobile`, `desktop`, `tablet` ou `outro`, que inclui bots e User-Agent ausente) e `referrer`. O campo `pais` fica vazio.
 7. Se a gravação do evento falhar, o clique é descartado, a falha é registrada em log e soma em um contador de falhas que a aplicação expõe. A resposta já enviada não muda.
 
 ### Consultas e painel
