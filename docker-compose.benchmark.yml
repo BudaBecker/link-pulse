@@ -1,0 +1,53 @@
+# Base de referência do benchmark (SPEC-005 passo 1, RM-29).
+# Usado junto com docker-compose.yml pelo benchmark/base.py; ver benchmark/README.md.
+#
+# Troca os volumes dos bancos comparados (e da réplica do Redis) por volumes
+# próprios do benchmark, com nome fixo. Assim, carregar e restaurar a base nunca
+# tocam os volumes de desenvolvimento (linkpulse_*-dados) nem os de outros projetos.
+
+services:
+  redis-master:
+    volumes:
+      - redis-master-benchmark:/data
+
+  redis-replica:
+    volumes:
+      - redis-replica-benchmark:/data
+
+  cassandra:
+    volumes:
+      - cassandra-benchmark:/var/lib/cassandra
+
+  postgres:
+    volumes:
+      - postgres-benchmark:/var/lib/postgresql
+
+  carga:
+    # Carrega e confere a base: benchmark/carregar.py e benchmark/conferir.py.
+    build: .
+    profiles: ["benchmark"]
+    command: ["python", "benchmark/carregar.py"]
+    cpus: "4"
+    mem_limit: 1g
+    memswap_limit: 1g
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-linkpulse}
+    volumes:
+      - ./benchmark:/linkpulse/benchmark:ro
+    depends_on:
+      redis-replica:
+        condition: service_healthy
+      cassandra-esquema:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+volumes:
+  redis-master-benchmark:
+    name: linkpulse-benchmark-redis-master
+  redis-replica-benchmark:
+    name: linkpulse-benchmark-redis-replica
+  cassandra-benchmark:
+    name: linkpulse-benchmark-cassandra
+  postgres-benchmark:
+    name: linkpulse-benchmark-postgres

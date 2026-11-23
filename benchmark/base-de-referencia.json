@@ -1,0 +1,30 @@
+{
+  "semente": 2026,
+  "inicio": "2026-08-03T00:00:00.000Z",
+  "fim": "2026-11-01T00:00:00.000Z",
+  "janela_historico": {
+    "inicio": "2026-10-31T00:00:00.000Z",
+    "fim": "2026-11-01T00:00:00.000Z"
+  },
+  "clientes": 150,
+  "prefixo_cliente_id": "bench-",
+  "links": 45000,
+  "cliques": 10000000,
+  "link_popular": {
+    "short_code": "uGDsIV1",
+    "cliente_id": "bench-001",
+    "cliques": 2000000,
+    "percentual": 20.0
+  },
+  "cliques_por_link_comum": {
+    "minimo": 177,
+    "maximo": 178
+  },
+  "dispositivos": {
+    "mobile": 6000000,
+    "desktop": 3000000,
+    "tablet": 500000,
+    "outro": 500000
+  },
+  "assinatura_cliques": "684a579112df8aa2"
+}

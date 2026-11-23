@@ -67,7 +67,7 @@ Para cada execução: vazão (operações por segundo), latência p50, p95 e p99
 
 ## Critérios de aceitação
 
-- [ ] **CA-1** (RNF-08) — Depois da carga e depois de cada restauração da cópia, a contagem de links e de cliques é igual no lado NoSQL e no PostgreSQL, e o link popular tem 20% dos cliques nos dois.
+- [x] **CA-1** (RNF-08) — Depois da carga e depois de cada restauração da cópia, a contagem de links e de cliques é igual no lado NoSQL e no PostgreSQL, e o link popular tem 20% dos cliques nos dois.
 - [ ] **CA-2** (RF-10) — Para cada uma das quatro operações, a execução produz vazão, p50, p95, p99 e taxa de erro dos dois lados.
 - [ ] **CA-3** (RNF-08) — Em cada etapa, os dois lados rodam um de cada vez, com o mesmo número de conexões e os mesmos tetos de CPU e memória; o uso de CPU do gerador fica registrado e abaixo de 70% do seu limite.
 - [ ] **CA-4** (RF-10, RNF-08) — A execução completa repete a sequência inteira 3 vezes, restaura a cópia antes de cada repetição e antes do histórico por período, descarta os 10 s de aquecimento e publica a mediana das etapas 1 a 5; a curva extra aparece nas duas escritas, separada da execução padrão.
