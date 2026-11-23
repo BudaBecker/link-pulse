@@ -38,7 +38,21 @@ COMPOSE = [
 # Ordem de parada: a réplica antes do master.
 BANCOS = ("redis-replica", "redis-master", "cassandra", "postgres")
 VOLUMES = {banco: f"linkpulse-benchmark-{banco}" for banco in BANCOS}
-COPIAS = {banco: f"linkpulse-benchmark-copia-{banco}" for banco in BANCOS}
+# Onde cada banco guarda os dados no contêiner.
+CAMINHO_DADOS = {
+    "redis-replica": "/data",
+    "redis-master": "/data",
+    "cassandra": "/var/lib/cassandra",
+    "postgres": "/var/lib/postgresql",
+}
+# Cada cópia é uma geração: um volume por banco mais um selo com o manifesto.
+# O selo só é criado depois que as quatro cópias terminam bem, e a restauração
+# só aceita uma geração selada.
+ROTULO_GERACAO = "linkpulse.benchmark.geracao"
+ROTULO_PAPEL = "linkpulse.benchmark.papel"
+SELO = "selo"
+# Cópias do formato anterior, sem geração; são apagadas na próxima cópia.
+COPIAS_ANTIGAS = [f"linkpulse-benchmark-copia-{banco}" for banco in BANCOS]
 COMPARADOS = ("redis-master", "cassandra", "postgres")
 # Imagem já usada pelo ambiente, para copiar os volumes sem baixar outra.
 IMAGEM_AUXILIAR = "redis:8.2.11-bookworm"
@@ -62,6 +76,72 @@ def conteiner(servico: str) -> str:
     if not identificador:
         sys.exit(f"serviço {servico} não está no ar")
     return identificador
+
+
+def exigir_volumes_de_benchmark() -> None:
+    """Recusa parar bancos que estejam no ar com outros volumes.
+
+    O docker-compose.yml e o docker-compose.benchmark.yml usam o mesmo projeto e
+    os mesmos serviços. Sem esta conferência, restaurar ou copiar encerraria os
+    bancos de desenvolvimento se eles estivessem no ar.
+    """
+    problemas = []
+    for banco in BANCOS:
+        for identificador in compose("ps", "-q", banco, capturar=True).split():
+            montagens = json.loads(rodar(["docker", "inspect", "-f", "{{json .Mounts}}", identificador], True))
+            volume = next(
+                (m.get("Name") for m in montagens if m["Destination"] == CAMINHO_DADOS[banco]), None
+            )
+            if volume != VOLUMES[banco]:
+                problemas.append(f"{banco} está no ar com {volume or 'outro armazenamento'} em {CAMINHO_DADOS[banco]}")
+    if problemas:
+        sys.exit(
+            "Nada foi parado: os bancos no ar não usam os volumes de benchmark.\n  "
+            + "\n  ".join(problemas)
+            + "\nPare-os com parada normal (docker compose stop) e rode o comando de novo."
+        )
+
+
+def geracoes() -> dict[str, dict[str, str]]:
+    """Volumes de cópia por geração: {geração: {banco ou "selo": volume}}."""
+    formato = "{{.Name}}\t{{.Label \"%s\"}}\t{{.Label \"%s\"}}" % (ROTULO_GERACAO, ROTULO_PAPEL)
+    saida = rodar(
+        ["docker", "volume", "ls", "--filter", f"label={ROTULO_GERACAO}", "--format", formato],
+        capturar=True,
+    )
+    resultado: dict[str, dict[str, str]] = {}
+    for linha in saida.splitlines():
+        nome, geracao, papel = linha.split("\t")
+        resultado.setdefault(geracao, {})[papel] = nome
+    return resultado
+
+
+def copia_valida() -> tuple[str, dict[str, str]] | None:
+    """A geração selada mais recente, com os quatro bancos."""
+    for geracao, volumes in sorted(geracoes().items(), reverse=True):
+        if SELO in volumes and all(banco in volumes for banco in BANCOS):
+            return geracao, volumes
+    return None
+
+
+def criar_volume(nome: str, geracao: str, papel: str) -> None:
+    rodar(["docker", "volume", "create", "--label", "linkpulse.benchmark=copia",
+           "--label", f"{ROTULO_GERACAO}={geracao}", "--label", f"{ROTULO_PAPEL}={papel}", nome], capturar=True)
+
+
+def remover_volumes(nomes) -> int:
+    removidos = 0
+    for nome in nomes:
+        if volume_existe(nome):
+            rodar(["docker", "volume", "rm", nome], capturar=True)
+            removidos += 1
+    return removidos
+
+
+def ler_selo(volume: str) -> dict:
+    texto = rodar(["docker", "run", "--rm", "-v", f"{volume}:/selo:ro", "--entrypoint", "cat",
+                   IMAGEM_AUXILIAR, "/selo/base-de-referencia.json"], capturar=True)
+    return json.loads(texto)
 
 
 def subir() -> float:
@@ -169,6 +249,11 @@ def cmd_manifesto(semente: int, fim: str, processos: int) -> dict:
 
 
 def cmd_conferir(completo: bool) -> float:
+    exigir_volumes_de_benchmark()
+    valida = copia_valida()
+    if valida is not None and ler_selo(valida[1][SELO]) != json.loads(MANIFESTO.read_text(encoding="utf-8")):
+        print(f"Aviso: o manifesto difere do guardado na cópia {valida[0]}; "
+              "se a base no ar for a da cópia, restaure para repor o manifesto.", file=sys.stderr)
     inicio = time.monotonic()
     argumentos = ["run", "--rm", "carga", "python", "benchmark/conferir.py"]
     compose(*argumentos, *(["--completo"] if completo else []))
@@ -176,6 +261,8 @@ def cmd_conferir(completo: bool) -> float:
 
 
 def cmd_copiar() -> dict:
+    exigir_volumes_de_benchmark()
+    manifesto = MANIFESTO.read_text(encoding="utf-8")
     print("Cópia da base: gravando o RDB do Redis e parando os bancos")
     for servico in ("redis-master", "redis-replica"):
         rodar(["docker", "exec", conteiner(servico), "redis-cli", "SAVE"])
@@ -190,32 +277,61 @@ def cmd_copiar() -> dict:
     # e termina com esta linha.
     drenado = "Cassandra shutdown complete" in logs.stdout + logs.stderr
     print(f"  bancos parados em {parada:.0f} s; Cassandra drenado: {'sim' if drenado else 'NÃO'}")
-    for banco, copia in COPIAS.items():
-        if volume_existe(copia):
-            rodar(["docker", "volume", "rm", copia], capturar=True)
-        rodar(["docker", "volume", "create", "--label", "linkpulse.benchmark=copia", copia], capturar=True)
-    copia_s = copiar_volumes(VOLUMES, COPIAS)
+    # A cópia anterior só é apagada depois que a nova estiver selada.
+    geracao = datetime.now().strftime("%Y%m%d-%H%M%S")
+    novas = {banco: f"linkpulse-benchmark-copia-{geracao}-{banco}" for banco in BANCOS}
+    selo = f"linkpulse-benchmark-copia-{geracao}-{SELO}"
+    try:
+        for banco, volume in novas.items():
+            criar_volume(volume, geracao, banco)
+        copia_s = copiar_volumes(VOLUMES, novas)
+        criar_volume(selo, geracao, SELO)
+        subprocess.run(
+            ["docker", "run", "--rm", "-i", "-v", f"{selo}:/selo", "--entrypoint", "sh", IMAGEM_AUXILIAR,
+             "-c", "cat > /selo/base-de-referencia.json"],
+            input=manifesto, text=True, encoding="utf-8", check=True,
+        )
+    except BaseException:
+        print("  a cópia falhou; a geração incompleta foi apagada e a cópia anterior continua valendo",
+              file=sys.stderr)
+        remover_volumes([*novas.values(), selo])
+        subir()
+        raise
     subida_s = subir()
-    print(f"  cópia em {copia_s:.0f} s; bancos de volta em {subida_s:.0f} s")
-    return {"parada_s": round(parada, 1), "cassandra_drenado": drenado,
+    antigas = [v for g, volumes in geracoes().items() if g != geracao for v in volumes.values()]
+    removidos = remover_volumes(antigas + COPIAS_ANTIGAS)
+    print(f"  geração {geracao} selada; cópia em {copia_s:.0f} s; bancos de volta em {subida_s:.0f} s; "
+          f"{removidos} volume(s) de cópias anteriores apagados")
+    return {"geracao": geracao, "parada_s": round(parada, 1), "cassandra_drenado": drenado,
             "copia_s": round(copia_s, 1), "subida_s": round(subida_s, 1)}
 
 
 def cmd_restaurar(conferir: bool) -> dict:
-    faltando = [c for c in COPIAS.values() if not volume_existe(c)]
-    if faltando:
-        sys.exit(f"cópia ausente ({', '.join(faltando)}); rode antes: python benchmark/base.py carregar")
-    print("Restauração da base")
+    exigir_volumes_de_benchmark()
+    valida = copia_valida()
+    if valida is None:
+        sys.exit("nenhuma cópia selada; rode antes: python benchmark/base.py carregar")
+    geracao, volumes = valida
+    manifesto_copia = ler_selo(volumes[SELO])
+    print(f"Restauração da base (cópia {geracao})")
     inicio = time.monotonic()
     # O estado atual é descartado, então os bancos não precisam de parada normal.
     compose("kill", *BANCOS)
     parada = time.monotonic() - inicio
-    copia = copiar_volumes(COPIAS, VOLUMES)
+    copia = copiar_volumes({b: volumes[b] for b in BANCOS}, VOLUMES)
+    # Os volumes e o manifesto voltam juntos: a janela do histórico e o link
+    # popular passam a ser os da base copiada.
+    atual = json.loads(MANIFESTO.read_text(encoding="utf-8")) if MANIFESTO.exists() else None
+    reposto = atual != manifesto_copia
+    if reposto:
+        MANIFESTO.write_text(json.dumps(manifesto_copia, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        print(f"  manifesto reposto pelo da cópia (semente {manifesto_copia['semente']}, "
+              f"fim {manifesto_copia['fim']}); o anterior descrevia outra base")
     subida = subir()
     total = time.monotonic() - inicio
     print(f"  pronto para uso em {total:.0f} s (parada {parada:.0f} s, cópia {copia:.0f} s, subida {subida:.0f} s)")
-    dados = {"parada_s": round(parada, 1), "copia_s": round(copia, 1),
-             "subida_s": round(subida, 1), "pronto_s": round(total, 1)}
+    dados = {"geracao": geracao, "manifesto_reposto": reposto, "parada_s": round(parada, 1),
+             "copia_s": round(copia, 1), "subida_s": round(subida, 1), "pronto_s": round(total, 1)}
     if conferir:
         dados["conferencia_s"] = round(cmd_conferir(completo=False), 1)
     return dados

@@ -52,31 +52,49 @@ O Redis recebe as gravações em pipelines de 500 links, com 4 conexões. A carg
 
 O [docker-compose.benchmark.yml](../docker-compose.benchmark.yml) entra junto com o [docker-compose.yml](../docker-compose.yml) e troca os volumes do Redis master, da réplica, do Cassandra e do PostgreSQL por volumes próprios do benchmark:
 
-| Banco | Volume de benchmark | Cópia |
+| Banco | Volume de benchmark | Cópia, por geração |
 | --- | --- | --- |
-| Redis master | `linkpulse-benchmark-redis-master` | `linkpulse-benchmark-copia-redis-master` |
-| Redis réplica | `linkpulse-benchmark-redis-replica` | `linkpulse-benchmark-copia-redis-replica` |
-| Cassandra | `linkpulse-benchmark-cassandra` | `linkpulse-benchmark-copia-cassandra` |
-| PostgreSQL | `linkpulse-benchmark-postgres` | `linkpulse-benchmark-copia-postgres` |
+| Redis master | `linkpulse-benchmark-redis-master` | `linkpulse-benchmark-copia-{geração}-redis-master` |
+| Redis réplica | `linkpulse-benchmark-redis-replica` | `linkpulse-benchmark-copia-{geração}-redis-replica` |
+| Cassandra | `linkpulse-benchmark-cassandra` | `linkpulse-benchmark-copia-{geração}-cassandra` |
+| PostgreSQL | `linkpulse-benchmark-postgres` | `linkpulse-benchmark-copia-{geração}-postgres` |
+| Manifesto da base copiada | — | `linkpulse-benchmark-copia-{geração}-selo` |
 
-Os comandos só apagam ou sobrescrevem esses oito volumes, pelo nome. Os volumes de desenvolvimento (`linkpulse_*-dados`), o do MongoDB e os de outros projetos ficam intactos. As cópias são volumes do Docker e, por isso, ficam fora do Git. Volume para volume, a cópia roda dentro da VM do Docker, sem passar pelo disco do Windows.
+A geração é o instante da cópia (`AAAAmmdd-HHMMSS`). Os comandos só apagam ou sobrescrevem os volumes de benchmark e as cópias. As cópias são escolhidas pelos rótulos `linkpulse.benchmark.geracao` e `linkpulse.benchmark.papel`. Os volumes de desenvolvimento (`linkpulse_*-dados`), o do MongoDB e os de outros projetos ficam intactos. As cópias são volumes do Docker e, por isso, ficam fora do Git. Volume para volume, a cópia roda dentro da VM do Docker, sem passar pelo disco do Windows. Durante a cópia, a geração anterior continua guardada, então é preciso espaço em disco para duas (cerca de 2,8 GB cada).
 
-**Copiar** (`copiar`, também no fim de `carregar`): grava o RDB do Redis com `SAVE`, para os bancos com prazo de 300 s e confere no log do Cassandra que ele foi drenado: a parada normal grava as memtables em disco. Em seguida, copia os quatro volumes em paralelo com `cp -a`, num contêiner da imagem do Redis já usada pelo ambiente, e religa os bancos.
+**Só com os volumes de benchmark.** O `docker-compose.yml` e o `docker-compose.benchmark.yml` usam o mesmo projeto e os mesmos serviços. Por isso, antes de parar qualquer banco, `copiar`, `restaurar` e `conferir` conferem os volumes montados pelos contêineres no ar. Se algum banco estiver com outro volume, por exemplo os de desenvolvimento depois de um `docker compose up -d --wait`, o comando para sem tocar em nada e pede a parada normal (`docker compose stop`). Já `carregar` troca de modo de propósito: ele remove os contêineres com parada normal, e os volumes de desenvolvimento continuam guardados.
 
-**Restaurar** (`restaurar`): encerra os quatro bancos com `docker compose kill`, porque o estado atual vai ser descartado. Depois, apaga o conteúdo dos volumes de benchmark, copia a cópia por cima e religa tudo com `docker compose up -d --wait`. O ambiente está pronto para uso quando o `--wait` retorna, com os healthchecks passando. Em seguida, a conferência do CA-1 roda nos próprios bancos. A restauração segue a [SPEC-005](../docs/specs/SPEC-005-testes-de-stress.md#carga-de-dados): os volumes voltam inteiros, sem apagar linhas, para não deixar *tombstones* no Cassandra.
+**Copiar** (`copiar`, também no fim de `carregar`):
+
+1. Grava o RDB do Redis com `SAVE`.
+2. Para os bancos com prazo de 300 s e confere no log do Cassandra que ele foi drenado: a parada normal grava as memtables em disco.
+3. Copia os quatro volumes, em paralelo e com `cp -a`, para uma geração nova, num contêiner da imagem do Redis já usada pelo ambiente.
+4. Grava o selo, com o manifesto da base, só depois que as quatro cópias terminam bem. Se algo falhar antes, a geração incompleta é apagada e a anterior continua valendo.
+5. Religa os bancos e apaga as gerações anteriores.
+
+**Restaurar** (`restaurar`):
+
+1. Escolhe a geração selada mais recente; uma geração sem selo é ignorada.
+2. Encerra os quatro bancos com `docker compose kill`, porque o estado atual vai ser descartado.
+3. Apaga o conteúdo dos volumes de benchmark e copia a geração por cima.
+4. Repõe o manifesto guardado no selo, se o de `benchmark/` tiver mudado. Assim, a janela do histórico e o link popular voltam junto com os dados.
+5. Religa tudo com `docker compose up -d --wait`.
+
+O ambiente está pronto para uso quando o `--wait` retorna, com os healthchecks passando. Em seguida, a conferência do CA-1 roda nos próprios bancos. A restauração segue a [SPEC-005](../docs/specs/SPEC-005-testes-de-stress.md#carga-de-dados): os volumes voltam inteiros, sem apagar linhas, para não deixar *tombstones* no Cassandra. O `conferir` avisa quando o manifesto difere do guardado na cópia.
 
 ## Conferência (CA-1)
 
 O [conferir.py](conferir.py) consulta os próprios bancos e sai com erro se algo não bater:
 
 - links: chaves `link:*` no Redis e linhas de `links` no PostgreSQL;
-- cliques: `COUNT(*)` de cada partição de `cliques_por_link` e `count(*)` por `short_code` em `cliques`, comparados link a link e com o que a semente gera;
+- cliques: `COUNT(*)` de cada partição de `cliques_por_link` e `count(*)` por `short_code` em `cliques`, comparados link a link e com o que a semente gera. A lista de partições vem do próprio Cassandra (`SELECT DISTINCT short_code`), e não das chaves do Redis, para um clique fora dos links também entrar no total;
+- nenhum clique de link inexistente: partições sem `link:*` no Redis e linhas de `cliques` sem linha em `links`;
 - link popular: total e percentual nos dois lados;
-- contadores: `contador:*` e `contadores` iguais aos cliques de cada link;
+- contadores: todos os `contador:*` e todas as linhas de `contadores`, iguais aos cliques de cada link;
 - clientes do benchmark no Redis e fora do Set `clientes`;
 - com `--completo`: a distribuição de dispositivos e a assinatura dos cliques, lendo todas as linhas dos dois lados.
 
-A partição do link popular, com 2 milhões de linhas, é contada em fatias de um dia, mais uma fatia aberta antes do início e outra depois do fim. Um `COUNT(*)` da partição inteira passa do tempo limite de leitura do servidor (5 s no padrão), e mudar esse limite tiraria o Cassandra da configuração padrão ([ADR-0013](../docs/decisoes/ADR-0013-stack-e-ambiente-do-marco-2.md#decisão)).
+A partição do link popular, com 2 milhões de linhas, e qualquer partição cujo `COUNT(*)` estoure o tempo são contadas em fatias de um dia, mais uma fatia aberta antes do início e outra depois do fim. Um `COUNT(*)` da partição inteira passa do tempo limite de leitura do servidor (5 s no padrão), e mudar esse limite tiraria o Cassandra da configuração padrão ([ADR-0013](../docs/decisoes/ADR-0013-stack-e-ambiente-do-marco-2.md#decisão)).
 
 ## Resultados medidos
 
@@ -119,8 +137,16 @@ O Cassandra coube no teto de 2 GB, então a regra do ADR-0013 (subir o teto dos 
 | 1 | 1 s | 7 s | 17 s | 25 s | 43 s, ok |
 | 2 | 1 s | 6 s | 17 s | 23 s | 45 s, ok |
 | 3, depois de gravar um clique a mais nos dois lados | 1 s | 8 s | 17 s | 26 s | 41 s, ok |
+| 4, com cópia por geração, depois de um clique de link inexistente no Cassandra e do manifesto reescrito com outro `--fim` | 1 s | 15 s | 22 s | 38 s | 41 s, ok |
+| 5, partindo dos bancos de desenvolvimento parados | 0 s | 10 s | 25 s | 35 s | 41 s, ok |
 
-Na terceira, antes de restaurar, a conferência acusou o clique a mais (10.000.001 cliques nos dois lados). Depois da restauração, voltou aos 10.000.000. A subida é quase toda a partida do Cassandra, sem repetição do commit log, porque a cópia foi feita com ele drenado.
+Na terceira, antes de restaurar, a conferência acusou o clique a mais (10.000.001 cliques nos dois lados). Depois da restauração, voltou aos 10.000.000. Na quarta, a conferência acusou o clique de link inexistente, e `conferir` avisou que o manifesto divergia da cópia. A restauração repôs o manifesto e voltou aos 10.000.000. Na quinta, a subida inclui recriar os contêineres com os volumes de benchmark. A cópia variou de 5 a 15 s com o uso do computador.
+
+Também conferido com o Docker:
+
+- com os bancos de desenvolvimento no ar, `restaurar`, `copiar` e `conferir` saíram com erro, e nenhum banco foi reiniciado;
+- uma falha simulada no fim da cópia apagou a geração incompleta e manteve a anterior selada;
+- uma geração mais nova sem selo foi ignorada pela restauração. A subida é quase toda a partida do Cassandra, sem repetição do commit log, porque a cópia foi feita com ele drenado.
 
 ### CA-1 conferido
 

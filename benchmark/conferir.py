@@ -4,8 +4,9 @@ Roda no contêiner `carga`: python benchmark/base.py conferir [--completo]
 
 Sempre, consultando os próprios bancos:
 - links: chaves `link:*` no Redis e linhas de `links` no PostgreSQL;
-- cliques: COUNT(*) de cada partição em `cliques_por_link` e COUNT(*) por
-  short_code em `cliques`, comparados link a link;
+- cliques: COUNT(*) de cada partição de `cliques_por_link`, com a lista de
+  partições lida do próprio Cassandra, e COUNT(*) por short_code em `cliques`,
+  comparados link a link; nenhum clique pode ser de um link inexistente;
 - link popular: total e percentual dos cliques nos dois lados;
 - contadores: `contador:*` no Redis e `contadores` no PostgreSQL iguais aos
   cliques de cada link;
@@ -58,29 +59,46 @@ def postgres() -> psycopg.Connection:
 def lado_nosql(sessao, base: Base, esperado_por_link: dict[str, int]) -> dict:
     mestre = redis.Redis(host="redis-master", decode_responses=True)
     links = [chave.removeprefix("link:") for chave in mestre.scan_iter("link:*", count=5000)]
+    # Todos os contadores, não só os dos links: um contador a mais também conta.
+    chaves = list(mestre.scan_iter("contador:*", count=5000))
     contadores = {}
-    for i in range(0, len(links), 5000):
-        fatia = links[i : i + 5000]
-        for codigo, valor in zip(fatia, mestre.mget([f"contador:{c}" for c in fatia])):
-            contadores[codigo] = int(valor) if valor is not None else None
+    for i in range(0, len(chaves), 5000):
+        fatia = chaves[i : i + 5000]
+        for chave, valor in zip(fatia, mestre.mget(fatia)):
+            contadores[chave.removeprefix("contador:")] = int(valor)
     clientes_bench = sum(1 for _ in mestre.scan_iter("cliente:bench-*", count=5000))
     no_set = [c for c in mestre.smembers("clientes") if c.startswith("bench-")]
 
+    # As partições vêm do próprio Cassandra, para um clique fora dos links do
+    # Redis também entrar no total.
+    particoes = {
+        linha.short_code
+        for linha in sessao.execute(
+            SimpleStatement("SELECT DISTINCT short_code FROM cliques_por_link", fetch_size=5000)
+        )
+    }
+    codigos = sorted(particoes | set(links))
+
     # O COUNT(*) de uma partição com milhões de linhas passa do tempo limite de
-    # leitura do servidor (5 s no padrão). Partições grandes são contadas em
-    # fatias de um dia, mais uma fatia aberta antes do início e outra depois do
-    # fim, para não deixar nenhum clique de fora.
-    grandes = {c for c, n in esperado_por_link.items() if n > LIMITE_PARTICAO_INTEIRA}
+    # leitura do servidor (5 s no padrão). Partições grandes, e as que estourarem
+    # o tempo, são contadas em fatias de um dia, mais uma fatia aberta antes do
+    # início e outra depois do fim, para não deixar nenhum clique de fora.
+    grandes = {c for c in codigos if esperado_por_link.get(c, 0) > LIMITE_PARTICAO_INTEIRA}
     consulta = sessao.prepare("SELECT COUNT(*) FROM cliques_por_link WHERE short_code = ?")
-    pequenos = [c for c in links if c not in grandes]
+    pequenos = [c for c in codigos if c not in grandes]
     resultados = execute_concurrent_with_args(
-        sessao, consulta, [(c,) for c in pequenos], concurrency=16, raise_on_first_error=True
+        sessao, consulta, [(c,) for c in pequenos], concurrency=16, raise_on_first_error=False
     )
-    cliques = {codigo: r.result_or_exc.one()[0] for codigo, r in zip(pequenos, resultados)}
+    cliques = {}
+    for codigo, resultado in zip(pequenos, resultados):
+        if resultado.success:
+            cliques[codigo] = resultado.result_or_exc.one()[0]
+        else:
+            grandes.add(codigo)
     fatia = sessao.prepare(
         "SELECT COUNT(*) FROM cliques_por_link WHERE short_code = ? AND clicado_em >= ? AND clicado_em < ?"
     )
-    for codigo in grandes & set(links):
+    for codigo in grandes:
         cortes = [-(2**62), *range(base.inicio_ms, base.fim_ms + 1, 86_400_000), 2**62]
         argumentos = [(codigo, de, ate) for de, ate in zip(cortes, cortes[1:])]
         partes = execute_concurrent_with_args(sessao, fatia, argumentos, concurrency=4, raise_on_first_error=True)
@@ -89,6 +107,7 @@ def lado_nosql(sessao, base: Base, esperado_por_link: dict[str, int]) -> dict:
         "links": len(links),
         "cliques_por_link": cliques,
         "contadores": contadores,
+        "sem_link": sorted(particoes - set(links)),
         "clientes_bench": clientes_bench,
         "clientes_bench_no_set": no_set,
     }
@@ -99,7 +118,14 @@ def lado_postgres(conexao) -> dict:
     links = cursor.execute("SELECT count(*) FROM links").fetchone()[0]
     cliques = dict(cursor.execute("SELECT short_code, count(*) FROM cliques GROUP BY short_code"))
     contadores = dict(cursor.execute("SELECT short_code, total FROM contadores"))
-    return {"links": links, "cliques_por_link": cliques, "contadores": contadores}
+    sem_link = [
+        linha[0]
+        for linha in cursor.execute(
+            "SELECT DISTINCT c.short_code FROM cliques c "
+            "LEFT JOIN links l USING (short_code) WHERE l.short_code IS NULL"
+        )
+    ]
+    return {"links": links, "cliques_por_link": cliques, "contadores": contadores, "sem_link": sem_link}
 
 
 def ler_tudo_nosql(sessao) -> tuple[Counter, Assinatura]:
@@ -145,6 +171,7 @@ def relatar(nome: str, lado: dict, esperado: dict) -> dict:
     conferir(lado["links"] == esperado["links"], f"{esperado['links']:,} links")
     conferir(total == esperado["cliques"], f"{esperado['cliques']:,} cliques")
     conferir(do_popular == esperado["link_popular"]["cliques"], "link popular com 20% dos cliques")
+    conferir(not lado["sem_link"], "nenhum clique de link inexistente")
     conferir(lado["contadores"] == lado["cliques_por_link"], "contador de cada link igual aos seus cliques")
     return {"links": lado["links"], "cliques": total, "popular": do_popular, "percentual_popular": round(percentual, 4)}
 
