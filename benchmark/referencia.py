@@ -20,6 +20,7 @@ from __future__ import annotations
 import hashlib
 import math
 import random
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Iterator, NamedTuple
@@ -319,3 +320,22 @@ def descrever(base: Base, assinatura: Assinatura | None = None) -> dict:
     if assinatura is not None:
         descricao["assinatura_cliques"] = assinatura.texto()
     return descricao
+
+
+def manifesto_valido(dados: object) -> bool:
+    """Diz se o manifesto é exatamente o que a semente e o instante final geram.
+
+    Recalcula todos os campos a partir de `semente` e `fim` (menos de 1 s) e
+    exige igualdade, mais uma assinatura de 16 dígitos hexadecimais. Pega campo
+    faltando, campo a mais e valor alterado.
+    """
+    if not isinstance(dados, dict) or not isinstance(dados.get("semente"), int):
+        return False
+    assinatura = dados.get("assinatura_cliques")
+    if not isinstance(assinatura, str) or not re.fullmatch(r"[0-9a-f]{16}", assinatura):
+        return False
+    try:
+        esperado = descrever(Base(semente=dados["semente"], fim=dados["fim"]))
+    except (KeyError, TypeError, ValueError):
+        return False
+    return {k: v for k, v in dados.items() if k != "assinatura_cliques"} == esperado

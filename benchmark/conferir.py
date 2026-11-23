@@ -33,7 +33,7 @@ from cassandra.cluster import Cluster
 from cassandra.concurrent import execute_concurrent_with_args
 from cassandra.query import SimpleStatement
 
-from referencia import Assinatura, Base, Clique, datetime_para_ms
+from referencia import Assinatura, Base, Clique, datetime_para_ms, manifesto_valido
 from carregar import MANIFESTO
 
 falhas: list[str] = []
@@ -182,6 +182,9 @@ def main() -> int:
     args = parser.parse_args()
 
     esperado = json.loads(MANIFESTO.read_text(encoding="utf-8"))
+    if not manifesto_valido(esperado):
+        print(f"Manifesto inválido em {MANIFESTO}; nada foi conferido.")
+        return 1
     base = Base(semente=esperado["semente"], fim=esperado["fim"])
     esperado_por_link = {l.short_code: l.cliques for l in base.links()}
     inicio = time.monotonic()

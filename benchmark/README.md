@@ -18,7 +18,7 @@ Os comandos rodam no computador do host, na raiz do repositório, com Python 3.1
 
 `carregar` aceita `--semente`, `--fim` (instante final, ISO 8601 com fuso) e `--processos` (padrão 4). Cada `carregar`, `copiar` e `restaurar` grava os tempos e a memória medidos em `benchmark/registros/`, fora do Git.
 
-**Um comando por vez.** `carregar`, `copiar`, `restaurar` e `conferir` pegam a trava `benchmark/.base.trava`, fora do Git. Enquanto um deles roda, os outros saem com erro e dizem qual comando está com a trava. A trava é do sistema operacional e se solta sozinha se o processo morrer. Isso importa porque `copiar` e `restaurar` deixam os bancos parados enquanto trocam os volumes. A conferência roda o contêiner `carga` com `--no-deps` e recusa bancos parados: ela nunca liga um banco.
+**Um comando por vez.** `carregar`, `copiar`, `restaurar` e `conferir` pegam a trava, que é um contêiner com nome fixo, `linkpulse-benchmark-trava`. O Docker não aceita dois contêineres com o mesmo nome. Os volumes e o projeto Compose também têm nome fixo, então a trava vale para qualquer cópia do repositório que use o mesmo Docker. Enquanto um comando roda, os outros saem com erro e dizem qual comando, processo e pasta estão com a trava. O contêiner fica preso à entrada padrão do comando: quando o comando termina ou morre, ele sai e é apagado (`--rm`). Isso importa porque `copiar` e `restaurar` deixam os bancos parados enquanto trocam os volumes. A conferência roda o contêiner `carga` com `--no-deps` e recusa bancos parados: ela nunca liga um banco.
 
 ## A base
 
@@ -36,7 +36,7 @@ Os comandos rodam no computador do host, na raiz do repositório, com Python 3.1
 
 O manifesto guarda esses valores e a assinatura dos cliques. O gerador de carga (RM-31) lê dele o link popular e a janela do histórico. O instante final é um parâmetro fixo e não depende do relógio: carregar em outro dia produz a mesma base.
 
-O manifesto que vale é o da base carregada, no volume `linkpulse-benchmark-manifesto`. Só `carregar` e `restaurar` o gravam, e a carga e a conferência o leem dali. O arquivo [base-de-referencia.json](base-de-referencia.json) é um espelho para leitura e para o Git. `carregar` e `restaurar` o atualizam, e `manifesto` reescreve só o espelho. Se o espelho divergir da base, `conferir` avisa e usa o manifesto da base.
+O manifesto que vale é o da base carregada, no volume `linkpulse-benchmark-manifesto`. Só `carregar` e `restaurar` o gravam, e a carga e a conferência o leem dali. O arquivo [base-de-referencia.json](base-de-referencia.json) é um espelho para leitura e para o Git. `carregar` e `restaurar` o atualizam, e `manifesto` reescreve só o espelho. Se o espelho divergir da base, `conferir` avisa e usa o manifesto da base. Um manifesto só é aceito, no volume e no selo, se for idêntico ao que a semente e o instante final geram, com uma assinatura de 16 dígitos hexadecimais. Campo faltando, campo a mais ou valor alterado o invalidam. A carga grava no volume o texto que ela mesma gerou, e não o espelho, que outro comando pode ter reescrito no meio.
 
 **Determinismo.** A geração está em [referencia.py](referencia.py). Os cliques saem em blocos de até 10.000, cada um com o próprio gerador aleatório, semeado pela semente, pelo link e pelo número do bloco. Assim, cada processo gera os seus blocos sem depender da ordem, e os 10 milhões de eventos nunca ficam em memória. O `clique_id` é um `timeuuid` (UUID versão 1) montado a partir do mesmo milissegundo de `clicado_em`, com o restante dos bits tirado do gerador do bloco. O dispositivo de cada clique vem de uma permutação dos índices, cortada nos limites 60/30/5/5, o que dá a proporção exata no total. O `pais` fica vazio, como na aplicação ([SPEC-004](../docs/specs/SPEC-004-aplicacao.md#redirecionamento)).
 
@@ -78,11 +78,12 @@ A geração é o instante da cópia (`AAAAmmdd-HHMMSS`). Os comandos só apagam 
 
 **Restaurar** (`restaurar`):
 
-1. Escolhe a geração mais recente com os quatro volumes e um selo íntegro. Um selo ausente, vazio ou inválido faz a escolha passar para a geração anterior.
+1. Escolhe a geração mais recente com os quatro volumes e um selo íntegro. Um selo ausente, vazio ou com um manifesto que não passa na validação faz a escolha passar para a geração anterior.
 2. Encerra os quatro bancos com `docker compose kill`, porque o estado atual vai ser descartado.
 3. Apaga o conteúdo dos volumes de benchmark e copia a geração por cima. Se essa cópia falhar, os bancos ficam parados, para não subirem com dados pela metade, e o comando pede para restaurar de novo.
-4. Grava o manifesto do selo em `linkpulse-benchmark-manifesto` e no espelho. Assim, a janela do histórico e o link popular voltam junto com os dados. O espelho não é interpretado, só comparado e sobrescrito; um espelho corrompido não interrompe a restauração.
-5. Religa tudo com `docker compose up -d --wait`. Depois que os volumes foram repostos, os bancos sempre religam, mesmo se o passo 4 falhar.
+4. Grava o manifesto do selo em `linkpulse-benchmark-manifesto`. Assim, a janela do histórico e o link popular voltam junto com os dados. Se essa gravação falhar, os bancos ficam parados, para não voltarem com dados e manifesto divergentes, e o comando pede para restaurar de novo.
+5. Atualiza o espelho. O espelho não é interpretado, só comparado e sobrescrito: um espelho corrompido ou que não pode ser gravado gera um aviso, mas não impede a subida.
+6. Religa tudo com `docker compose up -d --wait`.
 
 O ambiente está pronto para uso quando o `--wait` retorna, com os healthchecks passando. Em seguida, a conferência do CA-1 roda nos próprios bancos. A restauração segue a [SPEC-005](../docs/specs/SPEC-005-testes-de-stress.md#carga-de-dados): os volumes voltam inteiros, sem apagar linhas, para não deixar *tombstones* no Cassandra.
 
@@ -148,6 +149,10 @@ O Cassandra coube no teto de 2 GB, então a regra do ADR-0013 (subir o teto dos 
 | 8, com uma geração mais nova de selo vazio e o espelho do manifesto cortado no meio | 1 s | 8 s | 22 s | 31 s | ok |
 | 9, depois de uma reposição de volumes com falha simulada | 0 s | 10 s | 17 s | 27 s | ok |
 | 10, da cópia feita por uma nova carga completa com o manifesto vinculado | 1 s | 13 s | 17 s | 32 s | ok |
+| 11, com a trava no Docker, e comandos disparados de outra cópia do repositório durante ela | 1 s | 23 s | 29 s | 54 s | ok |
+| 12, com uma geração mais nova cujo selo não tem o campo `clientes` | 1 s | 24 s | 23 s | 50 s | ok |
+| 13, depois de uma falha simulada na gravação do manifesto oficial | 0 s | 11 s | 22 s | 34 s | ok |
+| 14, com falha simulada só na gravação do espelho | 1 s | 11 s | 22 s | 35 s | ok |
 
 Na terceira, antes de restaurar, a conferência acusou o clique a mais (10.000.001 cliques nos dois lados). Depois da restauração, voltou aos 10.000.000. Na quarta, a conferência acusou o clique de link inexistente, e `conferir` avisou que o manifesto divergia da cópia. A restauração repôs o manifesto e voltou aos 10.000.000. Na quinta, a subida inclui recriar os contêineres com os volumes de benchmark. Na sétima, os três comandos saíram com erro, indicando a restauração que estava com a trava, e nenhum contêiner `carga` foi criado. Na oitava, a geração de selo vazio foi ignorada, e o espelho voltou a ser idêntico ao do Git. A cópia variou de 5 a 26 s com o uso do computador.
 
@@ -158,7 +163,14 @@ Também conferido com o Docker:
 - uma geração mais nova sem selo foi ignorada pela restauração;
 - com o PostgreSQL parado, `conferir` saiu com erro e não o religou;
 - com o espelho reescrito com outro `--fim`, `copiar` selou o manifesto da base (fim em 01/11/2026), e não o do espelho;
-- uma reposição de volumes com falha simulada deixou os bancos parados, com a mensagem, e a restauração seguinte recuperou a base. A subida é quase toda a partida do Cassandra, sem repetição do commit log, porque a cópia foi feita com ele drenado.
+- uma reposição de volumes com falha simulada deixou os bancos parados, com a mensagem, e a restauração seguinte recuperou a base;
+- durante a restauração 11, `conferir`, `copiar` e `restaurar` de uma segunda cópia do repositório e `conferir` desta foram recusados, indicando o comando, o processo e a pasta com a trava;
+- com o processo que segurava a trava encerrado à força (`taskkill /F`), o contêiner da trava sumiu em 1 s, e o comando seguinte pegou a trava;
+- com o espelho reescrito com a semente 999 no meio de `carregar --semente 2026`, o volume oficial recebeu a semente 2026 (teste sem tocar nos volumes);
+- na restauração 12, a geração com o selo sem `clientes` foi ignorada, e a anterior foi restaurada;
+- na falha simulada da restauração 13, os bancos ficaram parados com a mensagem; na 14, os bancos subiram com o aviso.
+
+A subida é quase toda a partida do Cassandra, sem repetição do commit log, porque a cópia foi feita com ele drenado.
 
 ### CA-1 conferido
 
