@@ -46,7 +46,7 @@ Tarefas de código começam quando a spec correspondente estiver `Pronta`. As ta
 | RM-28 | Registrar o escopo do Marco 2 em decisões, requisitos e specs | M2 | — | — | ADR-0012 a ADR-0014 aceitas; [SPEC-004](../specs/SPEC-004-aplicacao.md) e [SPEC-005](../specs/SPEC-005-testes-de-stress.md) `Prontas`; requisitos e questões atualizados | a abrir |
 | RM-29 | Carregar os dados de referência nos dois lados | M2 | — | RM-24 | CA-1 da [SPEC-005](../specs/SPEC-005-testes-de-stress.md) verificado | a abrir |
 | RM-30 | Implementar a aplicação (SPEC-004) | M2 | — | RM-24, RM-28 | Critérios da [SPEC-004](../specs/SPEC-004-aplicacao.md) verificados por teste; quebrar por passo do plano | a abrir |
-| RM-31 | Implementar o gerador de carga, a calibração e os cenários (SPEC-005) | M2 | — | RM-29 | CA-2 a CA-6 da [SPEC-005](../specs/SPEC-005-testes-de-stress.md) verificados; resultado da calibração registrado | a abrir |
+| RM-31 | Implementar o gerador de carga, a calibração e os cenários (SPEC-005) | M2 | — | RM-29, RM-30 | CA-2 a CA-6 da [SPEC-005](../specs/SPEC-005-testes-de-stress.md) verificados; resultado da calibração registrado | a abrir |
 | RM-32 | Implementar a tela de testes (SPEC-005) | M2 | — | RM-31 | CA-7 e CA-8 da [SPEC-005](../specs/SPEC-005-testes-de-stress.md) verificados | a abrir |
 | RM-33 | Rodar as execuções completas e salvar o resultado | M2 | — | RM-30, RM-32 | Execução completa salva e aberta pela tela de testes; números conferidos pelo grupo | a abrir |
 | RM-34 | Fechar a documentação final do Marco 2 | M2 | — | RM-33 | EN-14 atendido na [DISCIPLINA](../produto/DISCIPLINA.md): modelagem, decisões e resultados medidos, com as limitações do método | a abrir |
