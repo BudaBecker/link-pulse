@@ -2,6 +2,8 @@
 
 Índice da documentação. Cada pasta tem um `README.md` que explica o seu conteúdo.
 
+Para um percurso pelo projeto inteiro (processo, arquitetura, como rodar, como conferir e como analisar o benchmark), comece pelo [GUIA](GUIA.md).
+
 | Pasta | Para quê | Comece por |
 | --- | --- | --- |
 | [produto/](produto/README.md) | Problema, público, pitch e regras da disciplina | [VISAO.md](produto/VISAO.md) |
