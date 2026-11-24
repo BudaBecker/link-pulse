@@ -54,13 +54,14 @@ services:
 
   gerador:
     # Gerador de carga: roda benchmark/gerador.py, chamado pelo benchmark/medir.py
-    # com os bancos já no ar (--no-deps).
+    # com os bancos já no ar (--no-deps). Cota e memória vêm da calibração: um
+    # processo por conexão, com pico de 3,0 GB em 64 (benchmark/README.md).
     build: .
     profiles: ["benchmark"]
     command: ["python", "benchmark/gerador.py", "--help"]
-    cpus: "4"
-    mem_limit: 1g
-    memswap_limit: 1g
+    cpus: "8"
+    mem_limit: 3g
+    memswap_limit: 3g
     environment:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-linkpulse}
     volumes:
