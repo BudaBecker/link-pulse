@@ -36,7 +36,7 @@ Os critérios de aceitação são numerados dentro de cada spec: "CA-1 da SPEC-0
 | --- | --- | --- |
 | Ambiente local | Passo 1 da [SPEC-004](specs/SPEC-004-aplicacao.md#plano-de-implementação) (RM-24) | [infra/](../infra/README.md), [docker-compose.yml](../docker-compose.yml), [Dockerfile](../Dockerfile) |
 | Base de referência do benchmark | Passo 1 da [SPEC-005](specs/SPEC-005-testes-de-stress.md#plano-de-implementação) (RM-29) | [benchmark/](../benchmark/README.md), [docker-compose.benchmark.yml](../docker-compose.benchmark.yml) |
-| Aplicação | Passos 2 a 6 da SPEC-004 (RM-30) | Planejada |
+| Aplicação | Passos 2 a 6 da SPEC-004 (RM-30) | Cadastro de cliente, campanha e criação de link em [app/](../app/README.md) (passo 2, RM-36); redirecionamento, consultas de analytics, tela e testes de aceitação planejados |
 | Gerador de carga, calibração e cenários | Passos 2 a 5 da SPEC-005 (RM-31) | Gerador em laço fechado das quatro operações em [benchmark/](../benchmark/README.md#gerador-de-carga) (RM-41), [calibração](../benchmark/README.md#calibração), que escolheu 8 conexões (RM-42), e [pico de tráfego](../benchmark/README.md#pico-de-tráfego) (RM-43); queda do Cassandra planejada |
 | Tela de testes | Passo 6 da SPEC-005 (RM-32) | Planejada |
 | Execuções completas, com o resultado salvo | Passo 7 da SPEC-005 (RM-33) | Planejadas |
@@ -77,13 +77,22 @@ O desenho está em [ARQUITETURA](arquitetura/ARQUITETURA.md) Passo 3, e o compor
 ### Pré-requisitos
 
 - **Docker com o Compose.** Os tetos de memória dos bancos somam 7,5 GB; o ambiente foi medido numa máquina virtual do Docker com 7,6 GiB. No Windows, a memória do Docker se ajusta em `.wslconfig` ([infra/README.md](../infra/README.md#consumo-de-memória-medido)).
-- **Python 3.11 ou mais novo no computador**, para preparar a base com `benchmark/base.py` e medir as operações com `benchmark/medir.py`. Ambos usam a biblioteca padrão. As bibliotecas de acesso aos bancos rodam dentro dos contêineres, nas versões de [requirements.txt](../requirements.txt).
+- **Python 3.11 ou mais novo no computador**, para preparar a base com `benchmark/base.py` e medir as operações com `benchmark/medir.py`. Ambos usam a biblioteca padrão. As bibliotecas de acesso aos bancos rodam dentro dos contêineres, nas versões de [requirements.txt](../requirements.txt). A aplicação é a exceção: roda no computador, num ambiente virtual Python com essas bibliotecas (ver [Aplicação](#aplicação)).
 - **Disco.** A base do benchmark ocupa cerca de 2,8 GB, e a cópia guardada para restaurá-la ocupa outro tanto. Ao fazer uma cópia nova, a anterior só é apagada quando a nova fica pronta.
 - **Senha do PostgreSQL**, opcional: a variável `POSTGRES_PASSWORD` (padrão `linkpulse`).
 
 ### Ambiente de desenvolvimento
 
 `docker compose up -d --wait` sobe os bancos e espera todos ficarem saudáveis; `docker compose run --rm verificar` confere o ambiente. Os comandos para parar e apagar os dados, o tempo de subida e o consumo medido estão em [infra/README.md](../infra/README.md#como-usar).
+
+### Aplicação
+
+Com os bancos de desenvolvimento no ar:
+
+1. **Criar o ambiente Python uma vez**, na raiz do repositório: `python -m venv .venv` e `.venv/Scripts/python -m pip install -r requirements-testes.txt` (no Linux e no macOS, `.venv/bin/python`).
+2. **Subir a API:** `.venv/Scripts/python -m uvicorn app.main:app --port 8000`. As rotas ficam documentadas em `http://127.0.0.1:8000/docs`.
+
+A aplicação grava nos volumes de desenvolvimento. Rotas, variáveis de ambiente e respostas de erro estão em [app/README.md](../app/README.md).
 
 ### Base de referência do benchmark
 
@@ -114,16 +123,16 @@ Só um comando da base roda por vez. Cada `carregar`, `copiar` e `restaurar` gra
 
 - **Ambiente:** `docker compose run --rm verificar` confere o Redis (réplica ligada e gravação em disco no padrão), o keyspace e as chaves de `cliques_por_link` no Cassandra, as tabelas, os índices e a confirmação de escrita do PostgreSQL, e se o MongoDB responde. Sai com código 1 se algo falhar. A lista completa está em [infra/README.md](../infra/README.md#como-usar).
 - **Base do benchmark** (CA-1 da [SPEC-005](specs/SPEC-005-testes-de-stress.md#critérios-de-aceitação)): `python benchmark/base.py conferir` consulta os próprios bancos e confere, link a link, que os dois lados têm os mesmos links e cliques, que o link popular tem 20% dos cliques e que os contadores batem com os cliques, em cerca de 45 s. Com `--completo`, lê os 10 milhões de cliques dos dois lados e confere a distribuição de dispositivos e a assinatura dos cliques, em cerca de 3 minutos. Termina com `CA-1 conferido.` ou com a lista do que falhou ([benchmark/README.md](../benchmark/README.md#conferência-ca-1)).
-- **Aplicação:** ainda sem testes. O passo 6 do plano da [SPEC-004](specs/SPEC-004-aplicacao.md#plano-de-implementação) prevê testes de aceitação para cada critério, inclusive com a réplica do Redis e o Cassandra fora do ar.
+- **Aplicação:** `.venv/Scripts/python -m pytest app`, com os bancos de desenvolvimento no ar, verifica os critérios CA-1 a CA-6 da [SPEC-004](specs/SPEC-004-aplicacao.md#critérios-de-aceitação) (cadastro de cliente, campanha e criação de link), os pedidos rejeitados sem nada gravado e a falha de gravação no Redis, em cerca de 3 s. Os testes usam o banco 15 do Redis e o banco `linkpulse_testes` do MongoDB, sem tocar nos dados da demonstração ([app/README.md](../app/README.md#como-testar)). Os testes dos demais critérios, inclusive com a réplica do Redis e o Cassandra fora do ar, entram nos próximos passos do plano.
 - **Benchmark:** `python benchmark/medir.py` mede as quatro operações e o pico de tráfego nos dois lados (CA-2 da SPEC-005, [benchmark/README.md](../benchmark/README.md#gerador-de-carga)), e `python benchmark/calibrar.py` escolhe o número de conexões e confere que, com ele, o gerador fica abaixo de 70% da sua cota nessas quatro operações, parte do CA-3 ([calibração](../benchmark/README.md#calibração)). O pico de tráfego teve zero erros nas três operações do lado NoSQL (CA-5), com o CA-3 conferido nele ([pico de tráfego](../benchmark/README.md#pico-de-tráfego)). Ainda falta verificar a queda do Cassandra e a apresentação dos resultados ao vivo e gravados.
 
 ## Como a aplicação funciona
 
-A aplicação ainda não foi implementada. O que segue é o comportamento previsto na [SPEC-004](specs/SPEC-004-aplicacao.md), que tem os detalhes e os critérios de aceitação:
+O cadastro de cliente, a campanha e a criação de link já estão implementados em [app/](../app/README.md); o redirecionamento e o painel ainda não. O comportamento completo e os critérios de aceitação estão na [SPEC-004](specs/SPEC-004-aplicacao.md):
 
 - **Clientes:** `POST /clientes` cadastra um cliente pelo nome no Redis, e `GET /clientes` lista os da demonstração, sem os clientes carregados para o benchmark.
 - **Campanhas:** `POST /campanhas` grava no MongoDB um documento com nome, descrição, tags e a lista de links da campanha.
-- **Links:** `POST /links` gera um código de 7 caracteres, aleatório, com letras e dígitos, que nunca sobrescreve um código existente. A aplicação grava o link no Redis e só responde `201` depois que o Redis confirma a gravação.
+- **Links:** `POST /links` gera um código de 7 caracteres, aleatório, com letras e dígitos, que nunca sobrescreve um código existente. A aplicação grava o link no Redis e só responde `201` depois que o Redis confirma a gravação; se a gravação falhar, responde `503`, sem código. Um pedido inválido é rejeitado com `422`, sem gravar nada (Q-40).
 - **Redirecionamento:** `GET /r/{short_code}` responde `302` para a URL, `404` se o link não existe e `410` se ele expirou, como em [O caminho de um clique](#o-caminho-de-um-clique).
 - **Painel:** uma página HTML servida pela própria aplicação, com o total de cliques, os cliques por dia e por dispositivo de um link e a comparação entre os canais do cliente. Os gráficos usam Chart.js, servido pela aplicação para funcionar sem internet ([ADR-0013](decisoes/ADR-0013-stack-e-ambiente-do-marco-2.md#decisão)).
 

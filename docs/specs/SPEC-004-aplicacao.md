@@ -26,22 +26,24 @@ Os dados e as chaves estão em [ARQUITETURA](../arquitetura/ARQUITETURA.md) Pass
 
 - `POST /clientes {nome}` grava o Hash `cliente:{cliente_id}` com o nome, inclui o `cliente_id` no Set `clientes` e responde `201` com o `cliente_id`.
 - `GET /clientes` lista os clientes do Set `clientes`. Os clientes carregados para o benchmark não aparecem.
+- O pedido sem `nome`, ou com `nome` vazio, é rejeitado com `422` e nada é gravado (Q-40).
 
 ### Campanha
 
 - `POST /campanhas {cliente_id, nome, descricao?, tags?}` grava um documento no MongoDB e responde `201` com o `campanha_id`.
 - O documento guarda `cliente_id`, `nome`, `descricao`, `tags` e a lista `links`, que começa vazia.
+- O pedido sem `cliente_id` ou sem `nome` é rejeitado com `422` e nada é gravado (Q-40).
 
 ### Criação de link
 
 `POST /links {url, cliente_id, canal?, expira_em?, campanha_id?}`:
 
-1. Rejeita o pedido sem `url` válida ou sem `cliente_id`, e o pedido com `campanha_id` que não existe. Nada é gravado.
+1. Rejeita com `422` o pedido sem `url` válida (absoluta, `http` ou `https`, com host) ou sem `cliente_id`, com `expira_em` sem fuso, e o pedido com `campanha_id` que não existe (Q-40). Nada é gravado.
 2. Gera um `short_code` de 7 caracteres em Base62 (letras maiúsculas, minúsculas e dígitos), a partir de uma fonte aleatória.
 3. Grava `link:{short_code}` só se a chave ainda não existir. Em colisão, gera outro código e tenta de novo.
 4. Inclui o `short_code` no Set `links:cliente:{cliente_id}`.
 5. Se houver `campanha_id`, acrescenta o `short_code` à lista `links` da campanha.
-6. Responde `201` com o `short_code` só depois da confirmação do Redis.
+6. Responde `201` com o `short_code` só depois da confirmação do Redis. Se a gravação no Redis falhar, ou se as novas tentativas depois de colisões se esgotarem, responde `503`, sem `short_code` (Q-40).
 
 ### Redirecionamento
 
@@ -74,12 +76,12 @@ Stack em [ADR-0013](../decisoes/ADR-0013-stack-e-ambiente-do-marco-2.md).
 
 ## Critérios de aceitação
 
-- [ ] **CA-1** (RF-08) — Dado um nome, quando envio `POST /clientes`, então recebo `201` com um `cliente_id`, e esse cliente aparece em `GET /clientes`.
-- [ ] **CA-2** (RF-01, RN-08) — Dada uma URL válida e um `cliente_id`, quando envio `POST /links`, então recebo `201` com o `short_code`; `link:{short_code}` contém `url`, `cliente_id` e `criado_em`, e o código está em `links:cliente:{cliente_id}`.
-- [ ] **CA-3** (RN-02) — Dado um pedido sem `cliente_id`, quando envio `POST /links`, então o pedido é rejeitado e nada é gravado no Redis.
-- [ ] **CA-4** (RN-01) — Dados 10.000 códigos gerados em sequência, então todos têm 7 caracteres em Base62 e não há dois consecutivos que difiram só no último caractere.
-- [ ] **CA-5** (RN-01) — Dado um `short_code` gerado que já existe, quando o link é criado, então o link existente não é alterado e o novo link recebe outro código.
-- [ ] **CA-6** (RF-09) — Dada uma campanha existente, quando crio um link com o seu `campanha_id`, então o `short_code` passa a fazer parte da lista `links` do documento da campanha.
+- [x] **CA-1** (RF-08) — Dado um nome, quando envio `POST /clientes`, então recebo `201` com um `cliente_id`, e esse cliente aparece em `GET /clientes`.
+- [x] **CA-2** (RF-01, RN-08) — Dada uma URL válida e um `cliente_id`, quando envio `POST /links`, então recebo `201` com o `short_code`; `link:{short_code}` contém `url`, `cliente_id` e `criado_em`, e o código está em `links:cliente:{cliente_id}`.
+- [x] **CA-3** (RN-02) — Dado um pedido sem `cliente_id`, quando envio `POST /links`, então o pedido é rejeitado e nada é gravado no Redis.
+- [x] **CA-4** (RN-01) — Dados 10.000 códigos gerados em sequência, então todos têm 7 caracteres em Base62 e não há dois consecutivos que difiram só no último caractere.
+- [x] **CA-5** (RN-01) — Dado um `short_code` gerado que já existe, quando o link é criado, então o link existente não é alterado e o novo link recebe outro código.
+- [x] **CA-6** (RF-09) — Dada uma campanha existente, quando crio um link com o seu `campanha_id`, então o `short_code` passa a fazer parte da lista `links` do documento da campanha.
 - [ ] **CA-7** (RF-02, RN-04) — Dado um link existente sem `expira_em`, quando recebo `GET /r/{short_code}`, então a resposta é `302` com `Location` igual à `url` gravada, em qualquer data.
 - [ ] **CA-8** (RN-03, RF-07) — Dado um link com `expira_em` no passado, quando recebo `GET /r/{short_code}`, então a resposta é `410`, o contador não muda e nenhum evento é gravado.
 - [ ] **CA-9** (RN-03) — Dado um `short_code` inexistente, quando recebo `GET /r/{short_code}`, então a resposta é `404`.
