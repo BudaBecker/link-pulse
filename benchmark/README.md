@@ -1,6 +1,6 @@
 # Base de referência do benchmark
 
-O benchmark do LinkPulse compara as mesmas operações no lado NoSQL (Redis e Cassandra) e no PostgreSQL, e a comparação só vale se os dois lados tiverem exatamente os mesmos dados. Esta pasta carrega esses dados, sempre iguais para a mesma semente, nos dois lados: clientes, links e cliques. Depois guarda uma cópia dos volumes dos bancos, para voltar a esse estado antes de cada repetição das medições. É o passo 1 do plano dos testes de stress ([SPEC-005](../docs/specs/SPEC-005-testes-de-stress.md#plano-de-implementação)), na tarefa de carregar os dados de referência nos dois lados (RM-29). Os dados seguem o modelo e o método do benchmark ([ADR-0014](../docs/decisoes/ADR-0014-modelo-de-dados-e-metodo-do-benchmark.md#dados-e-durações)).
+O benchmark do LinkPulse compara as mesmas operações no lado NoSQL (Redis e Cassandra) e no PostgreSQL, e a comparação só vale se os dois lados tiverem exatamente os mesmos dados. Esta pasta carrega esses dados, sempre iguais para a mesma semente, nos dois lados: clientes, links e cliques. Depois guarda uma cópia dos volumes dos bancos, para voltar a esse estado antes de cada repetição das medições. A pasta também tem o [gerador de carga](#gerador-de-carga), que mede as quatro operações sobre essa base. A base é o passo 1 do plano dos testes de stress ([SPEC-005](../docs/specs/SPEC-005-testes-de-stress.md#plano-de-implementação)), na tarefa de carregar os dados de referência nos dois lados (RM-29). Os dados seguem o modelo e o método do benchmark ([ADR-0014](../docs/decisoes/ADR-0014-modelo-de-dados-e-metodo-do-benchmark.md#dados-e-durações)).
 
 ## Como usar
 
@@ -38,7 +38,7 @@ Os contêineres que os comandos criam para mexer na base (cópia de volumes, lei
 | Demais links | 177 ou 178 cliques cada |
 | Dispositivo | exatamente 6.000.000 `mobile`, 3.000.000 `desktop`, 500.000 `tablet` e 500.000 `outro` |
 
-O manifesto é o arquivo JSON que descreve a base: guarda esses valores e a assinatura dos cliques. O gerador de carga, ainda a implementar (RM-31), vai ler dele o link popular e a janela do histórico. O instante final é um parâmetro fixo e não depende do relógio: carregar em outro dia produz a mesma base.
+O manifesto é o arquivo JSON que descreve a base: guarda esses valores e a assinatura dos cliques. O [gerador de carga](#gerador-de-carga) lê dele o link popular e a janela do histórico. O instante final é um parâmetro fixo e não depende do relógio: carregar em outro dia produz a mesma base.
 
 O manifesto que vale é o da base carregada, no volume `linkpulse-benchmark-manifesto`. Só `carregar` e `restaurar` o gravam, e a carga e a conferência o leem dali. O arquivo [base-de-referencia.json](base-de-referencia.json) é uma cópia dele, o espelho, para leitura e para o Git. `carregar` e `restaurar` atualizam o espelho, e `manifesto` reescreve só o espelho. Se o espelho divergir da base, `conferir` avisa e usa o manifesto da base. Um manifesto só é aceito, no volume e no selo da cópia (ver [Volumes e cópia](#volumes-e-cópia)), se for idêntico ao que a semente e o instante final geram, com uma assinatura de 16 dígitos hexadecimais. Campo faltando, campo a mais ou valor alterado o invalidam, assim como um `fim` que não seja texto com fuso entre 2000 e 2100. A validação nunca lança erro: um manifesto que não passa só é recusado. A carga grava no volume o texto que ela mesma gerou, e não o espelho, que outro comando pode ter reescrito no meio.
 
@@ -194,3 +194,60 @@ Conferido depois da carga e depois de cada restauração, consultando os bancos:
 | PostgreSQL | 45.000 | 10.000.000 | 2.000.000 | 20,0000% |
 
 Dispositivos, nos dois lados e lidos linha a linha: 6.000.000 `mobile` (60%), 3.000.000 `desktop` (30%), 500.000 `tablet` (5%) e 500.000 `outro` (5%). Os cliques de cada link batem entre os dois lados e com a semente, e os contadores batem com os cliques.
+
+## Gerador de carga
+
+O gerador mede as quatro operações do produto nos dois lados, em laço fechado: um número fixo de conexões, e cada uma só envia a próxima operação quando a anterior responde ([ADR-0014](../docs/decisoes/ADR-0014-modelo-de-dados-e-metodo-do-benchmark.md#como-a-carga-é-aplicada)). É o passo 2 do plano da [SPEC-005](../docs/specs/SPEC-005-testes-de-stress.md#plano-de-implementação) (RM-41). A calibração, o pico, a queda do Cassandra e a tela de testes ficam para RM-42 a RM-44 e RM-32.
+
+| Ação | Comando |
+| --- | --- |
+| Restaurar a base e medir as quatro operações nos dois lados | `python benchmark/medir.py` |
+| Medir só algumas operações ou um lado, com outras durações | `python benchmark/medir.py --operacoes contador registro --lados postgres --duracao 20 --aquecimento 5` |
+| Medir sobre o estado atual, sem restaurar em momento nenhum, nem antes do histórico | `python benchmark/medir.py --sem-restaurar` |
+
+`--conexoes` vale 8 por padrão, até a calibração escolher entre 8, 32 e 64. `--duracao` (60 s) e `--aquecimento` (10 s) seguem a execução completa.
+
+O [medir.py](medir.py) roda no computador, como o `base.py`, e pega a mesma trava: nenhum comando da base roda no meio de uma medição. Ele restaura a base antes de começar e de novo antes do histórico por período, se uma escrita rodou antes dele ([SPEC-005](../docs/specs/SPEC-005-testes-de-stress.md#sequência-de-testes)). As operações seguem a ordem da sequência de testes, um lado de cada vez. Cada execução é um contêiner `gerador` (4 CPUs, 1 GB), que roda o [gerador.py](gerador.py). O resultado vai para `benchmark/registros/`, fora do Git, e o resumo sai em tabela no fim.
+
+### O que cada operação executa
+
+| Operação | NoSQL | PostgreSQL |
+| --- | --- | --- |
+| Redirecionamento | `HGETALL link:{short_code}` no Redis master | `SELECT` das colunas de `links` pela chave |
+| Contador | `INCR contador:{short_code}` no Redis master | `UPDATE contadores SET total = total + 1` pela chave |
+| Registro de clique | `INSERT` em `cliques_por_link` no Cassandra | `INSERT` em `cliques` |
+| Histórico por período | `SELECT` em `cliques_por_link` na janela do manifesto, `LIMIT 1000` | o mesmo em `cliques`, `ORDER BY clicado_em DESC, clique_id DESC LIMIT 1000` |
+
+- **Link de cada chamada:** 20% caem no link popular do manifesto, e o resto se divide por igual entre os outros 44.999 links, com um sorteio de semente fixa por conexão.
+- **Clique gravado:** instante atual, `clique_id` `timeuuid` do mesmo instante, `pais` vazio, dispositivo e referrer na mesma proporção da base. Os instantes ficam depois da janela do histórico.
+- **Redis no master,** o banco que tem o mesmo teto dos outros dois.
+- **Comandos preparados:** `prepare` no Cassandra e `prepare=True` no PostgreSQL. O Redis não tem comando preparado.
+- **Conexões:** as conexões se dividem entre processos, uma thread por conexão, com um processo por CPU do limite. Cada thread tem a sua conexão e uma operação pendente nela. No Cassandra, cada conexão é um `Cluster` próprio do driver, com uma conexão de dados com o nó e outra de controle, quase parada. Durante um histórico com 8 conexões, `system_views.clients` mostrou 8 conexões de dados, com cerca de 3.000 pedidos cada, e 8 de controle, com 5.
+
+### Métricas
+
+| Métrica | Como é calculada |
+| --- | --- |
+| Vazão | operações concluídas sem erro nos segundos medidos, divididas pela duração |
+| p50, p95 e p99 | percentis por posição (nearest-rank) das latências sem erro, em ms |
+| Taxa de erro | erros divididos pelo total de operações medidas. Exceção do driver, link sem dados no redirecionamento e contador ausente contam como erro |
+| CPU do gerador | `usage_usec` do cgroup do contêiner, de `cpu.stat`, na janela medida, dividido pelo tempo e pelas CPUs do limite (`cpu.max`) |
+
+As operações que começam no aquecimento são descartadas, e só entram as que começam dentro da janela medida.
+
+### Execução de desenvolvimento
+
+Medido em 24/11/2026, no computador de desenvolvimento (o mesmo das [medições da base](#resultados-medidos)), com 8 conexões, 10 s de aquecimento e 60 s medidos por lado. A base foi restaurada antes do redirecionamento e antes do histórico, com o CA-1 conferido nas duas vezes. As duas linhas do Cassandra são de uma segunda execução, com uma conexão de dados por conexão pedida, também com a base restaurada antes de cada operação. É uma execução só, sem calibração e fora da máquina dedicada, e só mostra que o gerador produz as métricas (CA-2). Os números que valem são os da execução completa (RM-33).
+
+| Operação | Lado | Operações | Vazão (ops/s) | p50 (ms) | p95 (ms) | p99 (ms) | Taxa de erro | CPU do gerador |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Redirecionamento | NoSQL | 2.255.384 | 37.590 | 0,176 | 0,347 | 0,508 | 0% | 99,7% |
+| Redirecionamento | PostgreSQL | 1.822.851 | 30.381 | 0,189 | 0,326 | 0,461 | 0% | 91,7% |
+| Contador | NoSQL | 2.504.306 | 41.738 | 0,166 | 0,307 | 0,468 | 0% | 99,1% |
+| Contador | PostgreSQL | 70.282 | 1.171 | 4,243 | 20,373 | 35,861 | 0% | 3,4% |
+| Registro de clique | NoSQL | 464.235 | 7.737 | 0,817 | 1,406 | 3,228 | 0% | 81,6% |
+| Registro de clique | PostgreSQL | 220.950 | 3.682 | 1,209 | 4,433 | 5,549 | 0% | 11,8% |
+| Histórico por período | NoSQL | 126.708 | 2.112 | 1,467 | 12,129 | 31,203 | 0% | 68,8% |
+| Histórico por período | PostgreSQL | 528.065 | 8.801 | 0,244 | 2,136 | 4,748 | 0% | 71,6% |
+
+**CPU do gerador acima de 70% com 8 conexões.** Nos dois lados do redirecionamento, no contador do Redis, no registro no Cassandra e no histórico no PostgreSQL, o gerador passou de 70% do seu limite já com 8 conexões. Nessas execuções, ele pode ser o gargalo e a medição não vale (CA-3). A calibração (RM-42) confere isso e aplica a regra do [ADR-0013](../docs/decisoes/ADR-0013-stack-e-ambiente-do-marco-2.md#decisão): reescrever o laço que dispara as operações, em Rust.

@@ -52,6 +52,21 @@ services:
       postgres:
         condition: service_healthy
 
+  gerador:
+    # Gerador de carga: roda benchmark/gerador.py, chamado pelo benchmark/medir.py
+    # com os bancos já no ar (--no-deps).
+    build: .
+    profiles: ["benchmark"]
+    command: ["python", "benchmark/gerador.py", "--help"]
+    cpus: "4"
+    mem_limit: 1g
+    memswap_limit: 1g
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-linkpulse}
+    volumes:
+      - ./benchmark:/linkpulse/benchmark:ro
+      - manifesto-benchmark:/linkpulse/manifesto:ro
+
 volumes:
   redis-master-benchmark:
     name: linkpulse-benchmark-redis-master

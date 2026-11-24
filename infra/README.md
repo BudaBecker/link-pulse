@@ -35,7 +35,7 @@ O `verificar` confere, com as bibliotecas fixadas:
 | `mongo` | `mongo:8.0.38-noble` | 27017 | 1 | 1 GB | Campanhas; fora do benchmark |
 | `verificar` | [Dockerfile](../Dockerfile) | — | 1 | 256 MB | Perfil `verificacao`: fica fora do `up` e só roda com `docker compose run` |
 
-Os três bancos comparados (Redis master, Cassandra e PostgreSQL) usam o mesmo bloco de teto no [docker-compose.yml](../docker-compose.yml). O `memswap_limit` igual ao `mem_limit` impede que um contêiner passe do teto usando o disco como memória extra (swap). A aplicação e o gerador de carga ainda não existem; entram com os seus tetos nas tarefas que os implementam (RM-30 e RM-31).
+Os três bancos comparados (Redis master, Cassandra e PostgreSQL) usam o mesmo bloco de teto no [docker-compose.yml](../docker-compose.yml). O `memswap_limit` igual ao `mem_limit` impede que um contêiner passe do teto usando o disco como memória extra (swap). O gerador de carga, serviço `gerador` do [docker-compose.benchmark.yml](../docker-compose.benchmark.yml), tem 4 CPUs e 1 GB ([benchmark/README.md](../benchmark/README.md#gerador-de-carga)). A aplicação ainda não existe e entra com o seu teto na tarefa que a implementa (RM-30).
 
 ## Versões fixadas
 
@@ -43,7 +43,7 @@ Os três bancos comparados (Redis master, Cassandra e PostgreSQL) usam o mesmo b
 - Python 3.13.18 (`python:3.13.18-slim-bookworm`).
 - Bibliotecas em [requirements.txt](../requirements.txt): FastAPI 0.165.0, uvicorn 0.54.0, redis-py 8.2.0, cassandra-driver 3.30.1, psycopg 3.3.9, pymongo 4.20.1.
 
-Os serviços `verificar` e `carga` usam a mesma imagem Python. O script de verificação é copiado para a imagem durante o build. O serviço `carga` lê os scripts da pasta `benchmark/` montada em modo de leitura.
+Os serviços `verificar`, `carga` e `gerador` usam a mesma imagem Python. O script de verificação é copiado para a imagem durante o build. Os serviços `carga` e `gerador` leem os scripts da pasta `benchmark/` montada em modo de leitura.
 
 ## Consumo de memória medido
 
