@@ -289,6 +289,7 @@ def main() -> int:
         "taxa_erro": round(erros / total, 6) if total else None,
         "cpu_gerador_nucleos": round(nucleos, 2),
         "cpu_gerador_pct": round(100 * nucleos / limite_cpu, 1),
+        "cpu_gerador_pct_exato": 100 * nucleos / limite_cpu,  # o calibrar.py compara este com os 70%
         "limite_cpu_gerador": limite_cpu,
         "memoria_pico_gerador_mib": memoria_pico_mib(),
         "exemplos_de_erro": exemplos[:3],
