@@ -1,7 +1,9 @@
 """Gerador de carga em laço fechado do benchmark (SPEC-005, passo 2).
 
-Mede uma operação em um lado: um número fixo de conexões, e cada uma só envia
-a próxima operação quando a anterior responde (ADR-0014). As conexões se
+Mede uma operação, ou o pico de tráfego, em um lado: um número fixo de
+conexões, e cada uma só envia a próxima operação quando a anterior responde
+(ADR-0014). No pico, cada conexão repete leitura, contador e registro no link
+popular (Q-39). As conexões se
 dividem entre processos, por padrão um por conexão, com uma thread por
 conexão. Os comandos são
 preparados no Cassandra e no PostgreSQL; o Redis não tem comando preparado.
@@ -38,6 +40,9 @@ from carregar import MANIFESTO
 from referencia import DISPOSITIVOS, REFERRERS, Base, manifesto_valido
 
 OPERACOES = ("redirecionamento", "contador", "registro", "historico")
+PICO = "pico"
+# Operações que cada conexão repete, em ordem, a cada volta do laço.
+CICLO = {o: (o,) for o in OPERACOES} | {PICO: ("redirecionamento", "contador", "registro")}
 LADOS = ("nosql", "postgres")
 SORTEIO_POPULAR = 0.20  # parcela das chamadas que cai no link popular (ADR-0014)
 LIMITE_HISTORICO = 1000
@@ -70,85 +75,97 @@ def novo_clique(codigo: str, rng) -> tuple:
     return (codigo, agora, uuid_from_time(agora), None, dispositivo, referrer)
 
 
-def preparar(operacao: str, lado: str, janela: tuple[datetime, datetime]):
-    """Devolve `conectar()`, que abre uma conexão e devolve `executar(codigo, rng) -> bool`.
+def preparar(etapa: str, lado: str, janela: tuple[datetime, datetime]):
+    """Devolve `conectar()`, que abre uma conexão e devolve {operação: executar(codigo, rng) -> bool}.
 
     `executar` devolve False quando o banco responde sem o dado esperado (link
-    ou contador ausente); isso conta como erro.
+    ou contador ausente); isso conta como erro. No pico, as operações de uma
+    conexão compartilham a conexão de cada banco.
     """
-    if lado == "nosql" and operacao in ("redirecionamento", "contador"):
-        def conectar():
+    operacoes = CICLO[etapa]
+
+    def conectar():
+        if lado == "postgres":
+            return conectar_postgres(operacoes, janela)
+        executores = {}
+        if {"redirecionamento", "contador"} & set(operacoes):
             conexao = redis.Redis(host="redis-master", single_connection_client=True)
             conexao.ping()
-            if operacao == "redirecionamento":
-                return lambda codigo, rng: bool(conexao.hgetall(f"link:{codigo}"))
-            return lambda codigo, rng: conexao.incr(f"contador:{codigo}") > 1
-        return conectar
-
-    if lado == "nosql":
-        def conectar():
+            executores["redirecionamento"] = lambda codigo, rng: bool(conexao.hgetall(f"link:{codigo}"))
+            executores["contador"] = lambda codigo, rng: conexao.incr(f"contador:{codigo}") > 1
+        if {"registro", "historico"} & set(operacoes):
             # Um Cluster por conexão: o driver abre uma conexão de dados com o nó,
             # e esta thread mantém nela uma operação pendente, como nos outros bancos.
             sessao = Cluster(["cassandra"], protocol_version=5, executor_threads=1,
                              schema_metadata_enabled=False, token_metadata_enabled=False).connect("linkpulse")
-            comando = sessao.prepare(CQL[operacao])
-            if operacao == "registro":
-                return lambda codigo, rng: sessao.execute(comando, novo_clique(codigo, rng)) is not None
-            return lambda codigo, rng: list(sessao.execute(comando, (codigo, *janela))) is not None
-        return conectar
-
-    def conectar():
-        conexao = psycopg.connect(
-            host="postgres", user="linkpulse", dbname="linkpulse", autocommit=True,
-            password=os.environ.get("POSTGRES_PASSWORD", "linkpulse"),
-        )
-        cursor = conexao.cursor()
-        sql = SQL[operacao]
-        if operacao == "redirecionamento":
-            return lambda codigo, rng: cursor.execute(sql, (codigo,), prepare=True).fetchone() is not None
-        if operacao == "contador":
-            return lambda codigo, rng: cursor.execute(sql, (codigo,), prepare=True).rowcount == 1
-        if operacao == "registro":
-            return lambda codigo, rng: cursor.execute(sql, novo_clique(codigo, rng), prepare=True) is not None
-        return lambda codigo, rng: cursor.execute(sql, (codigo, *janela), prepare=True).fetchall() is not None
+            if "registro" in operacoes:
+                registro = sessao.prepare(CQL["registro"])
+                executores["registro"] = lambda codigo, rng: sessao.execute(
+                    registro, novo_clique(codigo, rng)) is not None
+            if "historico" in operacoes:
+                historico = sessao.prepare(CQL["historico"])
+                executores["historico"] = lambda codigo, rng: list(
+                    sessao.execute(historico, (codigo, *janela))) is not None
+        return {o: executores[o] for o in operacoes}
     return conectar
+
+
+def conectar_postgres(operacoes: tuple[str, ...], janela) -> dict:
+    conexao = psycopg.connect(
+        host="postgres", user="linkpulse", dbname="linkpulse", autocommit=True,
+        password=os.environ.get("POSTGRES_PASSWORD", "linkpulse"),
+    )
+    cursor = conexao.cursor()
+    executores = {
+        "redirecionamento": lambda codigo, rng: cursor.execute(
+            SQL["redirecionamento"], (codigo,), prepare=True).fetchone() is not None,
+        "contador": lambda codigo, rng: cursor.execute(SQL["contador"], (codigo,), prepare=True).rowcount == 1,
+        "registro": lambda codigo, rng: cursor.execute(
+            SQL["registro"], novo_clique(codigo, rng), prepare=True) is not None,
+        "historico": lambda codigo, rng: cursor.execute(
+            SQL["historico"], (codigo, *janela), prepare=True).fetchall() is not None,
+    }
+    return {o: executores[o] for o in operacoes}
 
 
 def processo(numero: int, conexoes: int, args: argparse.Namespace, popular: str, outros: list[str],
              janela, prontos, partida, marcos, saida) -> None:
     try:
         conectar = preparar(args.operacao, args.lado, janela)
-        operacoes = [conectar() for _ in range(conexoes)]
+        conexoes_abertas = [conectar() for _ in range(conexoes)]
     except BaseException:
         prontos.abort()  # o processo principal desiste em vez de esperar este
         raise
     resultados = [None] * conexoes
 
     def conexao(indice: int) -> None:
-        executar = operacoes[indice]
+        executores = conexoes_abertas[indice]
         rng = random.Random(f"{args.operacao}:{args.lado}:{numero}:{indice}")
         inicio_medida, fim = marcos[0], marcos[1]
-        latencias = array("d")
-        erros, exemplos = 0, []
+        medidas = {o: (array("d"), [0], []) for o in executores}  # latências, erros, exemplos
+        pico = args.operacao == PICO
         while True:
-            codigo = popular if rng.random() < SORTEIO_POPULAR else rng.choice(outros)
-            t0 = time.perf_counter()
-            if t0 >= fim:
-                break
-            try:
-                ok = executar(codigo, rng)
-            except Exception as erro:  # noqa: BLE001 - toda falha conta como erro da operação
-                ok = False
-                if len(exemplos) < 3:
-                    exemplos.append(f"{type(erro).__name__}: {erro}"[:200])
-            duracao = time.perf_counter() - t0
-            if t0 < inicio_medida:
-                continue  # aquecimento descartado
-            if ok:
-                latencias.append(duracao)
-            else:
-                erros += 1
-        resultados[indice] = (latencias, erros, exemplos)
+            # No pico, todas as chamadas vão ao link popular.
+            codigo = popular if pico or rng.random() < SORTEIO_POPULAR else rng.choice(outros)
+            for operacao, executar in executores.items():
+                t0 = time.perf_counter()
+                if t0 >= fim:
+                    resultados[indice] = medidas
+                    return
+                try:
+                    ok = executar(codigo, rng)
+                except Exception as erro:  # noqa: BLE001 - toda falha conta como erro da operação
+                    ok = False
+                    exemplos = medidas[operacao][2]
+                    if len(exemplos) < 3:
+                        exemplos.append(f"{type(erro).__name__}: {erro}"[:200])
+                duracao = time.perf_counter() - t0
+                if t0 < inicio_medida:
+                    continue  # aquecimento descartado
+                if ok:
+                    medidas[operacao][0].append(duracao)
+                else:
+                    medidas[operacao][1][0] += 1
 
     try:
         prontos.wait()
@@ -160,10 +177,14 @@ def processo(numero: int, conexoes: int, args: argparse.Namespace, popular: str,
         t.start()
     for t in threads:
         t.join()
-    latencias = array("d")
-    for parte, _, _ in resultados:
-        latencias.extend(parte)
-    saida.put((latencias, sum(r[1] for r in resultados), [e for r in resultados for e in r[2]][:3]))
+    juntas = {}
+    for operacao in CICLO[args.operacao]:
+        latencias = array("d")
+        for r in resultados:
+            latencias.extend(r[operacao][0])
+        juntas[operacao] = (latencias, sum(r[operacao][1][0] for r in resultados),
+                            [e for r in resultados for e in r[operacao][2]][:3])
+    saida.put(juntas)
 
 
 def cpus_do_limite() -> float:
@@ -197,6 +218,22 @@ def percentil(ordenadas: list[float], p: float) -> float | None:
     return ordenadas[max(0, math.ceil(p / 100 * len(ordenadas)) - 1)]
 
 
+def estatisticas(latencias, erros: int, exemplos: list[str], duracao: float) -> dict:
+    ordenadas = sorted(latencias)
+    total = len(ordenadas) + erros
+    ms = lambda s: None if s is None else round(s * 1000, 3)  # noqa: E731
+    return {
+        "operacoes": len(ordenadas),
+        "erros": erros,
+        "vazao_ops": round(len(ordenadas) / duracao, 1),
+        "p50_ms": ms(percentil(ordenadas, 50)),
+        "p95_ms": ms(percentil(ordenadas, 95)),
+        "p99_ms": ms(percentil(ordenadas, 99)),
+        "taxa_erro": round(erros / total, 6) if total else None,  # sem tentativas, indefinida
+        "exemplos_de_erro": exemplos[:3],
+    }
+
+
 def encerrar(filhos, motivo: str) -> int:
     print(f"Medição interrompida: {motivo}", flush=True)
     for filho in filhos:
@@ -208,7 +245,7 @@ def encerrar(filhos, motivo: str) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--operacao", choices=OPERACOES, required=True)
+    parser.add_argument("--operacao", choices=(*OPERACOES, PICO), required=True)
     parser.add_argument("--lado", choices=LADOS, required=True)
     parser.add_argument("--conexoes", type=int, default=8)
     parser.add_argument("--duracao", type=float, default=60)
@@ -256,22 +293,21 @@ def main() -> int:
     cpu_depois, relogio_depois = cpu_usada_s(), time.perf_counter()
     print("JANELA fim", flush=True)
 
-    latencias, erros, exemplos = array("d"), 0, []
+    juntas = {o: (array("d"), 0, []) for o in CICLO[args.operacao]}
     for _ in filhos:
         try:
-            parte, erros_parte, exemplos_parte = saida.get(timeout=120)
+            parte = saida.get(timeout=120)
         except queue.Empty:
             return encerrar(filhos, "um processo não devolveu o resultado")
-        latencias.extend(parte)
-        erros += erros_parte
-        exemplos += exemplos_parte
+        for operacao, (latencias, erros, exemplos) in parte.items():
+            soma = juntas[operacao]
+            soma[0].extend(latencias)
+            juntas[operacao] = (soma[0], soma[1] + erros, soma[2] + exemplos)
     for filho in filhos:
         filho.join()
 
     nucleos = (cpu_depois - cpu_antes) / (relogio_depois - relogio_antes)
-    ordenadas = sorted(latencias)
-    total = len(ordenadas) + erros
-    ms = lambda s: None if s is None else round(s * 1000, 3)  # noqa: E731
+    por_operacao = {o: estatisticas(*juntas[o], args.duracao) for o in CICLO[args.operacao]}
     resultado = {
         "operacao": args.operacao,
         "lado": args.lado,
@@ -280,19 +316,13 @@ def main() -> int:
         "processos": processos,
         "aquecimento_s": args.aquecimento,
         "duracao_s": args.duracao,
-        "operacoes": len(ordenadas),
-        "erros": erros,
-        "vazao_ops": round(len(ordenadas) / args.duracao, 1),
-        "p50_ms": ms(percentil(ordenadas, 50)),
-        "p95_ms": ms(percentil(ordenadas, 95)),
-        "p99_ms": ms(percentil(ordenadas, 99)),
-        "taxa_erro": round(erros / total, 6) if total else None,
+        # Nas etapas isoladas, as métricas da operação ficam no topo, onde o calibrar.py as lê.
+        **(por_operacao[args.operacao] if args.operacao != PICO else {"por_operacao": por_operacao}),
         "cpu_gerador_nucleos": round(nucleos, 2),
         "cpu_gerador_pct": round(100 * nucleos / limite_cpu, 1),
-        "cpu_gerador_pct_exato": 100 * nucleos / limite_cpu,  # o calibrar.py compara este com os 70%
+        "cpu_gerador_pct_exato": 100 * nucleos / limite_cpu,  # comparado com os 70% sem arredondar
         "limite_cpu_gerador": limite_cpu,
         "memoria_pico_gerador_mib": memoria_pico_mib(),
-        "exemplos_de_erro": exemplos[:3],
     }
     print("RESULTADO " + json.dumps(resultado, ensure_ascii=False), flush=True)
     return 0

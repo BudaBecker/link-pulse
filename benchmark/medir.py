@@ -1,14 +1,16 @@
-"""Mede as quatro operações nos dois lados com o gerador de carga (SPEC-005, passo 2).
+"""Mede as quatro operações e o pico nos dois lados com o gerador de carga (SPEC-005, passos 2 e 4).
 
 Roda no próprio computador, como o base.py, e chama benchmark/gerador.py no
 contêiner `gerador` para cada operação e cada lado, um de cada vez. Restaura a
 base antes de começar e antes do histórico por período, se uma escrita rodou
-antes dele; com --sem-restaurar, não restaura em momento nenhum. Usa a trava
+antes dele; o pico vem depois do histórico, sem nova restauração. Com
+--sem-restaurar, não restaura em momento nenhum. Usa a trava
 do base.py: nenhum comando da base roda no meio. Os argumentos são validados
-aqui, antes da trava. Na janela medida, lê também a CPU do banco exercitado.
+aqui, antes da trava. Na janela medida, lê também a CPU dos bancos exercitados.
 
     python benchmark/medir.py
     python benchmark/medir.py --operacoes contador registro --lados postgres --duracao 20 --aquecimento 5
+    python benchmark/medir.py --operacoes pico
 
 O resultado vai para benchmark/registros/, fora do Git. Detalhes em benchmark/README.md.
 """
@@ -28,14 +30,16 @@ from base import (
 )
 # As mesmas de gerador.py, que não é importado: ele usa os drivers dos bancos.
 OPERACOES = ("redirecionamento", "contador", "registro", "historico")
+PICO = "pico"
+ETAPAS = (*OPERACOES, PICO)  # a ordem da sequência de testes
 LADOS = ("nosql", "postgres")
-ESCRITAS = ("contador", "registro")
+ESCRITAS = ("contador", "registro", PICO)
 NOMES = {"nosql": "NoSQL", "postgres": "PostgreSQL"}
-# Banco que cada operação exercita, para ler a CPU dele na janela medida.
-BANCO = {
-    "nosql": {"redirecionamento": "redis-master", "contador": "redis-master",
-              "registro": "cassandra", "historico": "cassandra"},
-    "postgres": dict.fromkeys(OPERACOES, "postgres"),
+# Bancos que cada etapa exercita, para ler a CPU deles na janela medida.
+BANCOS = {
+    "nosql": {"redirecionamento": ("redis-master",), "contador": ("redis-master",),
+              "registro": ("cassandra",), "historico": ("cassandra",), PICO: ("redis-master", "cassandra")},
+    "postgres": dict.fromkeys(ETAPAS, ("postgres",)),
 }
 
 
@@ -57,8 +61,7 @@ def executar(operacao: str, lado: str, conexoes: int, args: argparse.Namespace) 
                "--aquecimento", str(args.aquecimento)]
     if args.processos:
         comando += ["--processos", str(args.processos)]
-    banco = BANCO[lado][operacao]
-    identificador = conteiner(banco)
+    bancos = {banco: conteiner(banco) for banco in BANCOS[lado][operacao]}
     resultado, janela = None, {}
     with subprocess.Popen(comando, stdout=subprocess.PIPE, text=True, encoding="utf-8") as gerador:
         for linha in gerador.stdout:
@@ -66,21 +69,39 @@ def executar(operacao: str, lado: str, conexoes: int, args: argparse.Namespace) 
                 resultado = json.loads(linha.removeprefix("RESULTADO "))
             elif linha.startswith("JANELA "):
                 # O gerador marca o início e o fim da janela medida.
-                janela[linha.split()[1]] = cpu_do_banco(identificador)
+                janela[linha.split()[1]] = {b: cpu_do_banco(i) for b, i in bancos.items()}
             else:
                 print("  " + linha, end="")
     if gerador.returncode or resultado is None or len(janela) != 2:
         raise subprocess.CalledProcessError(gerador.returncode or 1, comando)
-    (usado_antes, teto, antes), (usado_depois, _, depois) = janela["inicio"], janela["fim"]
-    nucleos = (usado_depois - usado_antes) / (depois - antes)
-    resultado |= {"banco": banco, "cpu_banco_nucleos": round(nucleos, 2),
-                  "cpu_banco_pct": round(100 * nucleos / teto, 1), "limite_cpu_banco": teto}
-    print(f"  vazão {resultado['vazao_ops']:,.0f} ops/s · p50 {resultado['p50_ms']} ms · "
-          f"p95 {resultado['p95_ms']} ms · p99 {resultado['p99_ms']} ms · erros {taxa(resultado['taxa_erro'])}\n"
-          f"  CPU do gerador {resultado['cpu_gerador_nucleos']} núcleos ({resultado['cpu_gerador_pct']}%) · "
-          f"CPU do {banco} {resultado['cpu_banco_nucleos']} núcleos ({resultado['cpu_banco_pct']}%) · "
-          f"pico de memória do gerador {resultado['memoria_pico_gerador_mib']} MiB")
+    resultado["cpu_bancos"] = {}
+    for banco in bancos:
+        (usado_antes, teto, antes), (usado_depois, _, depois) = janela["inicio"][banco], janela["fim"][banco]
+        nucleos = (usado_depois - usado_antes) / (depois - antes)
+        resultado["cpu_bancos"][banco] = {"nucleos": round(nucleos, 2), "pct": round(100 * nucleos / teto, 1),
+                                          "limite": teto}
+    if len(bancos) == 1:  # campos de um banco só, como nos registros da calibração
+        banco, cpu = next(iter(resultado["cpu_bancos"].items()))
+        resultado |= {"banco": banco, "cpu_banco_nucleos": cpu["nucleos"], "cpu_banco_pct": cpu["pct"],
+                      "limite_cpu_banco": cpu["limite"]}
+    for nome, metricas in linhas_de_operacao(resultado):
+        print(f"  {nome}: vazão {metricas['vazao_ops']:,.0f} ops/s · p50 {metricas['p50_ms']} ms · "
+              f"p95 {metricas['p95_ms']} ms · p99 {metricas['p99_ms']} ms · "
+              f"{metricas['operacoes']:,} sucessos · {metricas['erros']:,} erros ({taxa(metricas['taxa_erro'])})")
+    print(f"  CPU do gerador {resultado['cpu_gerador_nucleos']} núcleos ({resultado['cpu_gerador_pct']}%) · "
+          f"{cpu_dos_bancos(resultado)} · pico de memória do gerador {resultado['memoria_pico_gerador_mib']} MiB")
     return resultado
+
+
+def linhas_de_operacao(execucao: dict) -> list[tuple[str, dict]]:
+    """Uma linha por operação: no pico, as três; nas outras etapas, a própria."""
+    if "por_operacao" in execucao:
+        return [(f"pico: {o}", m) for o, m in execucao["por_operacao"].items()]
+    return [(execucao["operacao"], execucao)]
+
+
+def cpu_dos_bancos(execucao: dict) -> str:
+    return " · ".join(f"CPU do {b} {c['nucleos']} núcleos ({c['pct']}%)" for b, c in execucao["cpu_bancos"].items())
 
 
 def taxa(valor: float | None) -> str:
@@ -89,14 +110,18 @@ def taxa(valor: float | None) -> str:
 
 
 def tabela(execucoes: list[dict]) -> None:
-    print("\n| Conexões | Operação | Lado | Vazão (ops/s) | p50 (ms) | p95 (ms) | p99 (ms) | Taxa de erro "
-          "| CPU do gerador | CPU do banco | Memória do gerador (MiB) |")
-    print("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |")
+    print("\n| Conexões | Operação | Lado | Vazão (ops/s) | p50 (ms) | p95 (ms) | p99 (ms) | Sucessos | Erros "
+          "| Taxa de erro | CPU do gerador | CPU dos bancos | Memória do gerador (MiB) |")
+    print("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |")
     for e in execucoes:
-        print(f"| {e['conexoes']} | {e['operacao']} | {NOMES[e['lado']]} | {e['vazao_ops']:,.0f} | {e['p50_ms']} | "
-              f"{e['p95_ms']} | {e['p99_ms']} | {taxa(e['taxa_erro'])} | "
-              f"{e['cpu_gerador_nucleos']} ({e['cpu_gerador_pct']}%) | "
-              f"{e['cpu_banco_nucleos']} ({e['cpu_banco_pct']}%) | {e['memoria_pico_gerador_mib']} |")
+        # Registros antigos, de antes da CPU de vários bancos, têm só os campos de um banco.
+        cpus = e.get("cpu_bancos") or {e["banco"]: {"nucleos": e["cpu_banco_nucleos"], "pct": e["cpu_banco_pct"]}}
+        bancos = ", ".join(f"{b} {c['nucleos']} ({c['pct']}%)" for b, c in cpus.items())
+        for nome, m in linhas_de_operacao(e):
+            print(f"| {e['conexoes']} | {nome} | {NOMES[e['lado']]} | {m['vazao_ops']:,.0f} | {m['p50_ms']} | "
+                  f"{m['p95_ms']} | {m['p99_ms']} | {m['operacoes']:,} | {m['erros']:,} | {taxa(m['taxa_erro'])} | "
+                  f"{e['cpu_gerador_nucleos']} ({e['cpu_gerador_pct']}%) | {bancos} | "
+                  f"{e['memoria_pico_gerador_mib']} |")
 
 
 def sequencia(args: argparse.Namespace, conexoes: int, dados: dict) -> None:
@@ -108,7 +133,7 @@ def sequencia(args: argparse.Namespace, conexoes: int, dados: dict) -> None:
         dados["restauracoes"].append(cmd_restaurar(conferir=True))
     houve_escrita = False
     # Sempre na ordem da sequência de testes, qualquer que seja a ordem pedida.
-    for operacao in [o for o in OPERACOES if o in args.operacoes]:
+    for operacao in [o for o in ETAPAS if o in args.operacoes]:
         if operacao == "historico" and houve_escrita and not args.sem_restaurar:
             print("Restaurando a base antes do histórico por período")
             dados["restauracoes"].append(cmd_restaurar(conferir=True))
@@ -138,7 +163,8 @@ def argumentos_de_duracao(parser: argparse.ArgumentParser) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--operacoes", nargs="+", choices=OPERACOES, default=list(OPERACOES))
+    parser.add_argument("--operacoes", nargs="+", choices=ETAPAS, default=list(ETAPAS),
+                        help="etapas a medir; padrão: as quatro operações e o pico")
     parser.add_argument("--lados", nargs="+", choices=LADOS, default=list(LADOS))
     parser.add_argument("--conexoes", type=positivo(int), default=8, help="padrão 8, o número escolhido pela calibração")
     argumentos_de_duracao(parser)
