@@ -2,5 +2,7 @@ fastapi==0.165.0
 uvicorn==0.54.0
 redis==8.2.0
 cassandra-driver==3.30.1
+# No Windows o driver não tem libev, e o asyncore saiu do Python 3.12 (Q-43).
+pyasyncore==1.0.5; sys_platform == "win32"
 psycopg[binary]==3.3.9
 pymongo==4.20.1

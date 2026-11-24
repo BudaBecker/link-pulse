@@ -1,3 +1,4 @@
+import logging
 import secrets
 import string
 import uuid
@@ -8,7 +9,10 @@ from bson import ObjectId
 from bson.errors import InvalidId
 from pymongo.collection import Collection
 
+from app.cliques import RegistroDeCliques
 from app.models import NovaCampanha, NovoCliente, NovoLink
+
+log = logging.getLogger(__name__)
 
 ALFABETO_SHORT_CODE = string.ascii_uppercase + string.ascii_lowercase + string.digits
 TAMANHO_SHORT_CODE = 7
@@ -30,6 +34,14 @@ class CampanhaInexistente(Exception):
 
 
 class FalhaNaGravacao(Exception):
+    pass
+
+
+class LinkInexistente(Exception):
+    pass
+
+
+class LinkExpirado(Exception):
     pass
 
 
@@ -111,5 +123,40 @@ def criar_link(master: redis.Redis, campanhas: Collection, pedido: NovoLink) -> 
 
     if campanha_id is not None:
         campanhas.update_one({"_id": campanha_id}, {"$push": {"links": codigo}})
-        
+
     return codigo
+
+
+def buscar_url(replica: redis.Redis, master: redis.Redis, short_code: str) -> str:
+    chave = f"link:{short_code}"
+    try:
+        link = replica.hgetall(chave)
+
+    except redis.RedisError:
+        link = {}
+
+    # Um link recém-criado pode ainda não ter chegado à réplica (Q-31).
+    if not link:
+        link = master.hgetall(chave)
+
+    if not link:
+        raise LinkInexistente("short_code não existe")
+
+    expira_em = link.get("expira_em")
+    if expira_em is not None and datetime.fromisoformat(expira_em) < datetime.now(UTC):
+        raise LinkExpirado("link expirado")
+
+    return link["url"]
+
+
+def contar_clique(
+    master: redis.Redis, cliques: RegistroDeCliques, short_code: str, user_agent: str | None, referrer: str | None
+) -> None:
+    # Primeiro o evento, que não espera o Cassandra: uma falha no INCR não impede o registro.
+    cliques.registrar(short_code, user_agent, referrer)
+    try:
+        master.incr(f"contador:{short_code}")
+
+    # A resposta já saiu; o contador é soft state (RN-05).
+    except redis.RedisError as erro:
+        log.warning("incremento sem confirmação em %s: %r", short_code, erro)

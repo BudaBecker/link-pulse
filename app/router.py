@@ -1,9 +1,19 @@
-from fastapi import APIRouter, HTTPException, Request
+from urllib.parse import urlsplit
+
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
+from fastapi.responses import HTMLResponse, RedirectResponse
 
 from app import service
-from app.models import NovaCampanha, NovoCliente, NovoLink
+from app.models import URL_HTTP, NovaCampanha, NovoCliente, NovoLink
 
 router = APIRouter()
+
+PAGINA_EXPIRADO = """<!doctype html>
+<html lang="pt-BR">
+<head><meta charset="utf-8"><title>Link expirado</title></head>
+<body><h1>Link expirado</h1><p>Este link curto passou da data de expiração e não redireciona mais.</p></body>
+</html>
+"""
 
 
 @router.post("/clientes", status_code=201)
@@ -35,5 +45,42 @@ def criar_link(pedido: NovoLink, request: Request) -> dict:
     
     except service.FalhaNaGravacao as erro:
         raise HTTPException(503, str(erro)) from erro
-    
+
     return {"short_code": codigo}
+
+
+@router.get("/r/{short_code}", status_code=302, response_class=RedirectResponse)
+def redirecionar(short_code: str, request: Request, tarefas: BackgroundTasks):
+    estado = request.app.state
+    try:
+        url = service.buscar_url(estado.replica, estado.master, short_code)
+
+    except service.LinkInexistente as erro:
+        raise HTTPException(404, str(erro)) from erro
+
+    except service.LinkExpirado:
+        return HTMLResponse(PAGINA_EXPIRADO, status_code=410)
+
+    # As tarefas rodam depois que a resposta sai (RNF-02).
+    tarefas.add_task(
+        service.contar_clique,
+        estado.master,
+        estado.cliques,
+        short_code,
+        request.headers.get("user-agent"),
+        request.headers.get("referer"),
+    )
+    return RedirectResponse(host_em_idna(url), status_code=302)
+
+
+def host_em_idna(url: str) -> str:
+    # O RedirectResponse codificaria "café" como "caf%C3%A9". O validador do cadastro dá o mesmo
+    # host que ele aceitou ("faß" em "xn--fa-hia", e não "fass" como o codec idna do Python).
+    if urlsplit(url).hostname.isascii():
+        return url
+    return str(URL_HTTP.validate_python(url))
+
+
+@router.get("/metricas")
+def metricas(request: Request) -> dict:
+    return {"falhas_gravacao_clique": request.app.state.cliques.falhas}
