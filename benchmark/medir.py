@@ -2,8 +2,9 @@
 
 Roda no próprio computador, como o base.py, e chama benchmark/gerador.py no
 contêiner `gerador` para cada operação e cada lado, um de cada vez. Restaura a
-base antes de começar e antes do histórico por período, se uma escrita rodou
-antes dele; o pico vem depois do histórico, sem nova restauração. Com
+base antes de começar e de novo antes do histórico e antes do pico, se uma
+escrita rodou desde a última restauração. Na sequência completa, o pico vem
+depois do histórico, que não escreve, e não restaura de novo. Com
 --sem-restaurar, não restaura em momento nenhum. Usa a trava
 do base.py: nenhum comando da base roda no meio. Os argumentos são validados
 aqui, antes da trava. Na janela medida, lê também a CPU dos bancos exercitados.
@@ -23,6 +24,7 @@ import math
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 from base import (
     COMPOSE, ROTULO_AUXILIAR, Trava, cmd_restaurar, conteiner, exigir_bancos_no_ar, exigir_volumes_de_benchmark,
@@ -63,13 +65,16 @@ def executar(operacao: str, lado: str, conexoes: int, args: argparse.Namespace) 
         comando += ["--processos", str(args.processos)]
     bancos = {banco: conteiner(banco) for banco in BANCOS[lado][operacao]}
     resultado, janela = None, {}
-    with subprocess.Popen(comando, stdout=subprocess.PIPE, text=True, encoding="utf-8") as gerador:
+    leitor = ThreadPoolExecutor(max_workers=len(bancos))
+    with leitor, subprocess.Popen(comando, stdout=subprocess.PIPE, text=True, encoding="utf-8") as gerador:
         for linha in gerador.stdout:
             if linha.startswith("RESULTADO "):
                 resultado = json.loads(linha.removeprefix("RESULTADO "))
             elif linha.startswith("JANELA "):
-                # O gerador marca o início e o fim da janela medida.
-                janela[linha.split()[1]] = {b: cpu_do_banco(i) for b, i in bancos.items()}
+                # O gerador marca o início e o fim da janela medida. Os bancos são lidos
+                # em paralelo, para nenhuma leitura esperar a do outro banco.
+                leituras = {b: leitor.submit(cpu_do_banco, i) for b, i in bancos.items()}
+                janela[linha.split()[1]] = {b: f.result() for b, f in leituras.items()}
             else:
                 print("  " + linha, end="")
     if gerador.returncode or resultado is None or len(janela) != 2:
@@ -134,9 +139,11 @@ def sequencia(args: argparse.Namespace, conexoes: int, dados: dict) -> None:
     houve_escrita = False
     # Sempre na ordem da sequência de testes, qualquer que seja a ordem pedida.
     for operacao in [o for o in ETAPAS if o in args.operacoes]:
-        if operacao == "historico" and houve_escrita and not args.sem_restaurar:
-            print("Restaurando a base antes do histórico por período")
+        # O histórico lê as linhas acrescentadas, e o pico partiria de bases diferentes em cada lado.
+        if operacao in ("historico", PICO) and houve_escrita and not args.sem_restaurar:
+            print(f"Restaurando a base antes do {'histórico por período' if operacao == 'historico' else 'pico'}")
             dados["restauracoes"].append(cmd_restaurar(conferir=True))
+            houve_escrita = False
         for lado in [l for l in LADOS if l in args.lados]:
             print(f"\n{operacao} / {NOMES[lado]}, {conexoes} conexões")
             dados["execucoes"].append(executar(operacao, lado, conexoes, args))
