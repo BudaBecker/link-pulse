@@ -1,15 +1,20 @@
 import os
+from pathlib import Path
 
 import pytest
 import redis
+from cassandra.cluster import Cluster
 from fastapi.testclient import TestClient
 from pymongo import MongoClient
 
-from app.main import criar_app
+from app.cliques import RegistroDeCliques
+from app.main import TEMPO_LIMITE_CLIQUE, criar_app
 
-# Banco 15 do Redis e um banco próprio no MongoDB, para não apagar os dados da demonstração.
+# Banco 15 do Redis e bancos próprios no MongoDB e no Cassandra, para não apagar os dados da demonstração.
 BANCO_REDIS = 15
 BANCO_MONGO = "linkpulse_testes"
+KEYSPACE_CASSANDRA = "linkpulse_testes"
+ESQUEMA_CASSANDRA = Path(__file__).parents[2] / "infra" / "cassandra" / "esquema.cql"
 
 
 def conectar_redis(variavel_porta: str, porta_padrao: str) -> redis.Redis:
@@ -46,9 +51,34 @@ def campanhas():
     mongo.close()
 
 
+@pytest.fixture(scope="session")
+def sessao_cassandra():
+    cluster = Cluster(
+        [os.environ.get("CASSANDRA_HOST", "127.0.0.1")],
+        port=int(os.environ.get("CASSANDRA_PORT", "9042")),
+        protocol_version=5,
+    )
+    sessao = cluster.connect()
+    esquema = ESQUEMA_CASSANDRA.read_text(encoding="utf-8").replace("linkpulse", KEYSPACE_CASSANDRA)
+    for comando in esquema.split(";"):
+        if comando.strip():
+            sessao.execute(comando)
+    sessao.set_keyspace(KEYSPACE_CASSANDRA)
+    yield sessao
+    cluster.shutdown()
+
+
 @pytest.fixture
-def api(master, campanhas):
-    return TestClient(criar_app(master, campanhas))
+def cliques(sessao_cassandra, master):
+    yield RegistroDeCliques(sessao_cassandra, TEMPO_LIMITE_CLIQUE)
+    # Roda antes do flushdb do master: apaga os cliques dos links que o teste criou.
+    for chave in master.scan_iter("link:*"):
+        sessao_cassandra.execute("DELETE FROM cliques_por_link WHERE short_code = %s", (chave.removeprefix("link:"),))
+
+
+@pytest.fixture
+def api(master, campanhas, replica, cliques):
+    return TestClient(criar_app(master, campanhas, replica, cliques))
 
 
 @pytest.fixture

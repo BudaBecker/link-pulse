@@ -1,9 +1,17 @@
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
+from fastapi.responses import HTMLResponse, RedirectResponse
 
 from app import service
 from app.models import NovaCampanha, NovoCliente, NovoLink
 
 router = APIRouter()
+
+PAGINA_EXPIRADO = """<!doctype html>
+<html lang="pt-BR">
+<head><meta charset="utf-8"><title>Link expirado</title></head>
+<body><h1>Link expirado</h1><p>Este link curto passou da data de expiração e não redireciona mais.</p></body>
+</html>
+"""
 
 
 @router.post("/clientes", status_code=201)
@@ -35,5 +43,34 @@ def criar_link(pedido: NovoLink, request: Request) -> dict:
     
     except service.FalhaNaGravacao as erro:
         raise HTTPException(503, str(erro)) from erro
-    
+
     return {"short_code": codigo}
+
+
+@router.get("/r/{short_code}", status_code=302, response_class=RedirectResponse)
+def redirecionar(short_code: str, request: Request, tarefas: BackgroundTasks):
+    estado = request.app.state
+    try:
+        url = service.buscar_url(estado.replica, estado.master, short_code)
+
+    except service.LinkInexistente as erro:
+        raise HTTPException(404, str(erro)) from erro
+
+    except service.LinkExpirado:
+        return HTMLResponse(PAGINA_EXPIRADO, status_code=410)
+
+    # As tarefas rodam depois que a resposta sai (RNF-02).
+    tarefas.add_task(
+        service.contar_clique,
+        estado.master,
+        estado.cliques,
+        short_code,
+        request.headers.get("user-agent"),
+        request.headers.get("referer"),
+    )
+    return RedirectResponse(url, status_code=302)
+
+
+@router.get("/metricas")
+def metricas(request: Request) -> dict:
+    return {"falhas_gravacao_clique": request.app.state.cliques.falhas}
