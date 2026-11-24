@@ -15,6 +15,7 @@ import argparse
 import json
 import math
 import os
+import queue
 import random
 import sys
 import threading
@@ -22,6 +23,7 @@ import time
 from array import array
 from datetime import UTC, datetime
 from multiprocessing import get_context
+from threading import BrokenBarrierError
 from pathlib import Path
 
 import psycopg
@@ -81,19 +83,16 @@ def preparar(operacao: str, lado: str, janela: tuple[datetime, datetime]):
         return conectar
 
     if lado == "nosql":
-        # Uma sessão por processo, compartilhada pelas threads: o driver
-        # multiplexa as operações nas conexões dele.
-        sessao = Cluster(["cassandra"], protocol_version=5).connect("linkpulse")
-        comando = sessao.prepare(CQL[operacao])
-        if operacao == "registro":
-            def executar(codigo, rng):
-                sessao.execute(comando, novo_clique(codigo, rng))
-                return True
-        else:
-            def executar(codigo, rng):
-                list(sessao.execute(comando, (codigo, *janela)))
-                return True
-        return lambda: executar
+        def conectar():
+            # Um Cluster por conexão: o driver abre uma conexão de dados com o nó,
+            # e esta thread mantém nela uma operação pendente, como nos outros bancos.
+            sessao = Cluster(["cassandra"], protocol_version=5, executor_threads=1,
+                             schema_metadata_enabled=False, token_metadata_enabled=False).connect("linkpulse")
+            comando = sessao.prepare(CQL[operacao])
+            if operacao == "registro":
+                return lambda codigo, rng: sessao.execute(comando, novo_clique(codigo, rng)) is not None
+            return lambda codigo, rng: list(sessao.execute(comando, (codigo, *janela))) is not None
+        return conectar
 
     def conectar():
         conexao = psycopg.connect(
@@ -114,8 +113,12 @@ def preparar(operacao: str, lado: str, janela: tuple[datetime, datetime]):
 
 def processo(numero: int, conexoes: int, args: argparse.Namespace, popular: str, outros: list[str],
              janela, prontos, partida, marcos, saida) -> None:
-    conectar = preparar(args.operacao, args.lado, janela)
-    operacoes = [conectar() for _ in range(conexoes)]
+    try:
+        conectar = preparar(args.operacao, args.lado, janela)
+        operacoes = [conectar() for _ in range(conexoes)]
+    except BaseException:
+        prontos.abort()  # o processo principal desiste em vez de esperar este
+        raise
     resultados = [None] * conexoes
 
     def conexao(indice: int) -> None:
@@ -144,7 +147,10 @@ def processo(numero: int, conexoes: int, args: argparse.Namespace, popular: str,
                 erros += 1
         resultados[indice] = (latencias, erros, exemplos)
 
-    prontos.wait()
+    try:
+        prontos.wait()
+    except BrokenBarrierError:
+        return
     partida.wait()
     threads = [threading.Thread(target=conexao, args=(i,)) for i in range(conexoes)]
     for t in threads:
@@ -181,6 +187,15 @@ def percentil(ordenadas: list[float], p: float) -> float | None:
     return ordenadas[max(0, math.ceil(p / 100 * len(ordenadas)) - 1)]
 
 
+def encerrar(filhos, motivo: str) -> int:
+    print(f"Medição interrompida: {motivo}", flush=True)
+    for filho in filhos:
+        filho.terminate()
+    for filho in filhos:
+        filho.join()
+    return 1
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--operacao", choices=OPERACOES, required=True)
@@ -212,7 +227,11 @@ def main() -> int:
               for i, n in enumerate(divisao)]
     for filho in filhos:
         filho.start()
-    prontos.wait()  # todas as conexões abertas e os comandos preparados
+    try:
+        prontos.wait(timeout=120)  # todas as conexões abertas e os comandos preparados
+    except BrokenBarrierError:
+        prontos.abort()
+        return encerrar(filhos, "um processo não conseguiu abrir as conexões")
     agora = time.perf_counter()
     marcos[0], marcos[1] = agora + args.aquecimento, agora + args.aquecimento + args.duracao
     inicio = datetime.now(UTC)
@@ -227,7 +246,10 @@ def main() -> int:
 
     latencias, erros, exemplos = array("d"), 0, []
     for _ in filhos:
-        parte, erros_parte, exemplos_parte = saida.get()
+        try:
+            parte, erros_parte, exemplos_parte = saida.get(timeout=120)
+        except queue.Empty:
+            return encerrar(filhos, "um processo não devolveu o resultado")
         latencias.extend(parte)
         erros += erros_parte
         exemplos += exemplos_parte

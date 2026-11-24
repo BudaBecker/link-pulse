@@ -203,7 +203,7 @@ O gerador mede as quatro operações do produto nos dois lados, em laço fechado
 | --- | --- |
 | Restaurar a base e medir as quatro operações nos dois lados | `python benchmark/medir.py` |
 | Medir só algumas operações ou um lado, com outras durações | `python benchmark/medir.py --operacoes contador registro --lados postgres --duracao 20 --aquecimento 5` |
-| Medir sobre o estado atual, sem restaurar | `python benchmark/medir.py --sem-restaurar` |
+| Medir sobre o estado atual, sem restaurar em momento nenhum, nem antes do histórico | `python benchmark/medir.py --sem-restaurar` |
 
 `--conexoes` vale 8 por padrão, até a calibração escolher entre 8, 32 e 64. `--duracao` (60 s) e `--aquecimento` (10 s) seguem a execução completa.
 
@@ -222,7 +222,7 @@ O [medir.py](medir.py) roda no computador, como o `base.py`, e pega a mesma trav
 - **Clique gravado:** instante atual, `clique_id` `timeuuid` do mesmo instante, `pais` vazio, dispositivo e referrer na mesma proporção da base. Os instantes ficam depois da janela do histórico.
 - **Redis no master,** o banco que tem o mesmo teto dos outros dois.
 - **Comandos preparados:** `prepare` no Cassandra e `prepare=True` no PostgreSQL. O Redis não tem comando preparado.
-- **Conexões:** as conexões se dividem entre processos, uma thread por conexão, com um processo por CPU do limite. No Redis e no PostgreSQL, cada thread tem a sua conexão. No Cassandra, as threads de um processo dividem uma sessão do driver, que leva as operações em paralelo na mesma conexão. Nos dois lados, o número de operações em andamento é o número de conexões.
+- **Conexões:** as conexões se dividem entre processos, uma thread por conexão, com um processo por CPU do limite. Cada thread tem a sua conexão e uma operação pendente nela. No Cassandra, cada conexão é um `Cluster` próprio do driver, com uma conexão de dados com o nó e outra de controle, quase parada. Durante um histórico com 8 conexões, `system_views.clients` mostrou 8 conexões de dados, com cerca de 3.000 pedidos cada, e 8 de controle, com 5.
 
 ### Métricas
 
@@ -237,7 +237,7 @@ As operações que começam no aquecimento são descartadas, e só entram as que
 
 ### Execução de desenvolvimento
 
-Medido em 24/11/2026, no computador de desenvolvimento (o mesmo das [medições da base](#resultados-medidos)), com 8 conexões, 10 s de aquecimento e 60 s medidos por lado. A base foi restaurada antes do redirecionamento e antes do histórico, com o CA-1 conferido nas duas vezes. É uma execução só, sem calibração e fora da máquina dedicada, e só mostra que o gerador produz as métricas (CA-2). Os números que valem são os da execução completa (RM-33).
+Medido em 24/11/2026, no computador de desenvolvimento (o mesmo das [medições da base](#resultados-medidos)), com 8 conexões, 10 s de aquecimento e 60 s medidos por lado. A base foi restaurada antes do redirecionamento e antes do histórico, com o CA-1 conferido nas duas vezes. As duas linhas do Cassandra são de uma segunda execução, com uma conexão de dados por conexão pedida, também com a base restaurada antes de cada operação. É uma execução só, sem calibração e fora da máquina dedicada, e só mostra que o gerador produz as métricas (CA-2). Os números que valem são os da execução completa (RM-33).
 
 | Operação | Lado | Operações | Vazão (ops/s) | p50 (ms) | p95 (ms) | p99 (ms) | Taxa de erro | CPU do gerador |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -245,9 +245,9 @@ Medido em 24/11/2026, no computador de desenvolvimento (o mesmo das [medições 
 | Redirecionamento | PostgreSQL | 1.822.851 | 30.381 | 0,189 | 0,326 | 0,461 | 0% | 91,7% |
 | Contador | NoSQL | 2.504.306 | 41.738 | 0,166 | 0,307 | 0,468 | 0% | 99,1% |
 | Contador | PostgreSQL | 70.282 | 1.171 | 4,243 | 20,373 | 35,861 | 0% | 3,4% |
-| Registro de clique | NoSQL | 499.439 | 8.324 | 0,783 | 1,195 | 2,575 | 0% | 79,8% |
+| Registro de clique | NoSQL | 464.235 | 7.737 | 0,817 | 1,406 | 3,228 | 0% | 81,6% |
 | Registro de clique | PostgreSQL | 220.950 | 3.682 | 1,209 | 4,433 | 5,549 | 0% | 11,8% |
-| Histórico por período | NoSQL | 128.008 | 2.134 | 1,721 | 10,243 | 18,600 | 0% | 72,4% |
+| Histórico por período | NoSQL | 126.708 | 2.112 | 1,467 | 12,129 | 31,203 | 0% | 68,8% |
 | Histórico por período | PostgreSQL | 528.065 | 8.801 | 0,244 | 2,136 | 4,748 | 0% | 71,6% |
 
-**CPU do gerador acima de 70% com 8 conexões.** No redirecionamento, no contador do Redis, no registro no Cassandra e no histórico, o gerador passou de 70% do seu limite já com 8 conexões. Nessas execuções, ele pode ser o gargalo e a medição não vale (CA-3). A calibração (RM-42) confere isso e aplica a regra do [ADR-0013](../docs/decisoes/ADR-0013-stack-e-ambiente-do-marco-2.md#decisão): reescrever o laço que dispara as operações, em Rust.
+**CPU do gerador acima de 70% com 8 conexões.** Nos dois lados do redirecionamento, no contador do Redis, no registro no Cassandra e no histórico no PostgreSQL, o gerador passou de 70% do seu limite já com 8 conexões. Nessas execuções, ele pode ser o gargalo e a medição não vale (CA-3). A calibração (RM-42) confere isso e aplica a regra do [ADR-0013](../docs/decisoes/ADR-0013-stack-e-ambiente-do-marco-2.md#decisão): reescrever o laço que dispara as operações, em Rust.

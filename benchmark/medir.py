@@ -3,7 +3,9 @@
 Roda no próprio computador, como o base.py, e chama benchmark/gerador.py no
 contêiner `gerador` para cada operação e cada lado, um de cada vez. Restaura a
 base antes de começar e antes do histórico por período, se uma escrita rodou
-antes dele. Usa a trava do base.py: nenhum comando da base roda no meio.
+antes dele; com --sem-restaurar, não restaura em momento nenhum. Usa a trava
+do base.py: nenhum comando da base roda no meio. Os argumentos são validados
+aqui, antes da trava.
 
     python benchmark/medir.py
     python benchmark/medir.py --operacoes contador registro --lados postgres --duracao 20 --aquecimento 5
@@ -57,14 +59,26 @@ def tabela(execucoes: list[dict]) -> None:
               f"{e['p99_ms']} | {e['taxa_erro']:.4%} | {e['cpu_gerador_pct']}% |")
 
 
+def positivo(tipo, zero: bool = False):
+    """Tipo do argparse que recusa negativos, e zero se zero=False, antes de pegar a trava."""
+    def converter(texto: str):
+        valor = tipo(texto)
+        if valor < 0 or (valor == 0 and not zero):
+            raise argparse.ArgumentTypeError(f"precisa ser {'>= 0' if zero else '> 0'}")
+        return valor
+    return converter
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--operacoes", nargs="+", choices=OPERACOES, default=list(OPERACOES))
     parser.add_argument("--lados", nargs="+", choices=LADOS, default=list(LADOS))
-    parser.add_argument("--conexoes", type=int, default=8, help="padrão 8, até a calibração (RM-42)")
-    parser.add_argument("--duracao", type=float, default=60, help="segundos medidos por lado")
-    parser.add_argument("--aquecimento", type=float, default=10, help="segundos descartados antes da medição")
-    parser.add_argument("--sem-restaurar", action="store_true", help="mede sobre o estado atual da base")
+    parser.add_argument("--conexoes", type=positivo(int), default=8, help="padrão 8, até a calibração (RM-42)")
+    parser.add_argument("--duracao", type=positivo(float), default=60, help="segundos medidos por lado")
+    parser.add_argument("--aquecimento", type=positivo(float, zero=True), default=10,
+                        help="segundos descartados antes da medição")
+    parser.add_argument("--sem-restaurar", action="store_true",
+                        help="mede sobre o estado atual da base, sem restaurar em momento nenhum")
     args = parser.parse_args()
 
     dados = {"parametros": vars(args), "restauracoes": [], "execucoes": []}
@@ -79,7 +93,7 @@ def main() -> int:
             houve_escrita = False
             # Sempre na ordem da sequência de testes, qualquer que seja a ordem pedida.
             for operacao in [o for o in OPERACOES if o in args.operacoes]:
-                if operacao == "historico" and houve_escrita:
+                if operacao == "historico" and houve_escrita and not args.sem_restaurar:
                     print("Restaurando a base antes do histórico por período")
                     dados["restauracoes"].append(cmd_restaurar(conferir=True))
                 for lado in [l for l in LADOS if l in args.lados]:
