@@ -56,7 +56,7 @@ Há dois conjuntos de dados para os mesmos bancos: os volumes de desenvolvimento
 
 ### Como testar e conferir
 
-`docker compose run --rm verificar` confere o ambiente. `python benchmark/base.py conferir` confirma que os dois lados do benchmark têm os mesmos links e cliques, e `--completo` compara também a distribuição de dispositivos e uma assinatura calculada sobre todos os cliques. O gerador já registra a vazão, os tempos de resposta e os erros nos dois lados. Ainda faltam os testes da aplicação, a calibração do gerador e os cenários de pico de tráfego e de queda do Cassandra. Mais em [Como testar e conferir](docs/GUIA.md#como-testar-e-conferir).
+`docker compose run --rm verificar` confere o ambiente. `python benchmark/base.py conferir` confirma que os dois lados do benchmark têm os mesmos links e cliques, e `--completo` compara também a distribuição de dispositivos e uma assinatura calculada sobre todos os cliques. O gerador já registra a vazão, os tempos de resposta e os erros nos dois lados, e a calibração escolheu o número de conexões. Ainda faltam os testes da aplicação e os cenários de pico de tráfego e de queda do Cassandra. Mais em [Como testar e conferir](docs/GUIA.md#como-testar-e-conferir).
 
 ### Como a aplicação funciona
 
@@ -66,7 +66,7 @@ A aplicação ainda não foi implementada. A [especificação da aplicação](do
 
 O gerador já compara quatro operações. Ele lê o link e incrementa o contador no Redis, grava e consulta o histórico de cliques no Cassandra e repete as mesmas operações no PostgreSQL. Para cada uma, registra quantas operações terminam com sucesso por segundo, quanto tempo levam e quantas falham.
 
-A calibração, os cenários de pico e de queda do Cassandra e a tela de testes estão planejados. A meta no pico é completar as operações do lado NoSQL sem erros. Durante a queda do Cassandra, a meta é continuar redirecionando o usuário e manter o tempo de resposta abaixo de 50 ms em pelo menos 95% dos pedidos. Veja [como interpretar as medições e os limites da comparação](docs/GUIA.md#como-analisar-os-resultados-do-benchmark).
+A calibração escolheu 8 conexões, o maior número em que o gerador fica abaixo de 70% da sua cota de CPU. Os cenários de pico e de queda do Cassandra e a tela de testes estão planejados. A meta no pico é completar as operações do lado NoSQL sem erros. Durante a queda do Cassandra, a meta é continuar redirecionando o usuário e manter o tempo de resposta abaixo de 50 ms em pelo menos 95% dos pedidos. Veja [como interpretar as medições e os limites da comparação](docs/GUIA.md#como-analisar-os-resultados-do-benchmark).
 
 ## Documentação
 

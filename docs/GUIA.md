@@ -37,7 +37,7 @@ Os critérios de aceitação são numerados dentro de cada spec: "CA-1 da SPEC-0
 | Ambiente local | Passo 1 da [SPEC-004](specs/SPEC-004-aplicacao.md#plano-de-implementação) (RM-24) | [infra/](../infra/README.md), [docker-compose.yml](../docker-compose.yml), [Dockerfile](../Dockerfile) |
 | Base de referência do benchmark | Passo 1 da [SPEC-005](specs/SPEC-005-testes-de-stress.md#plano-de-implementação) (RM-29) | [benchmark/](../benchmark/README.md), [docker-compose.benchmark.yml](../docker-compose.benchmark.yml) |
 | Aplicação | Passos 2 a 6 da SPEC-004 (RM-30) | Planejada |
-| Gerador de carga, calibração e cenários | Passos 2 a 5 da SPEC-005 (RM-31) | Gerador em laço fechado das quatro operações em [benchmark/](../benchmark/README.md#gerador-de-carga) (RM-41); calibração e cenários planejados |
+| Gerador de carga, calibração e cenários | Passos 2 a 5 da SPEC-005 (RM-31) | Gerador em laço fechado das quatro operações em [benchmark/](../benchmark/README.md#gerador-de-carga) (RM-41) e [calibração](../benchmark/README.md#calibração), que escolheu 8 conexões (RM-42); cenários planejados |
 | Tela de testes | Passo 6 da SPEC-005 (RM-32) | Planejada |
 | Execuções completas, com o resultado salvo | Passo 7 da SPEC-005 (RM-33) | Planejadas |
 
@@ -90,9 +90,10 @@ O desenho está em [ARQUITETURA](arquitetura/ARQUITETURA.md) Passo 3, e o compor
 Os mesmos bancos rodam com volumes próprios do benchmark, separados dos de desenvolvimento. O roteiro de uso:
 
 1. **Carregar uma vez:** `python benchmark/base.py carregar`. Recria os volumes do benchmark vazios, grava o histórico de 10 milhões de cliques no Cassandra e no PostgreSQL e os links e contadores correspondentes no Redis e no PostgreSQL, confere tudo e guarda uma cópia dos volumes. Leva cerca de 10 minutos ([tempos por etapa](../benchmark/README.md#carga)).
-2. **Medir as quatro operações:** `python benchmark/medir.py`. O comando restaura a cópia, mede um lado por vez e salva os resultados em `benchmark/registros/`. Para apenas repor e conferir a base, use `python benchmark/base.py restaurar`. Veja as [opções de medição](../benchmark/README.md#gerador-de-carga).
-3. **Conferir a qualquer momento:** `python benchmark/base.py conferir`.
-4. **Voltar ao desenvolvimento:** `docker compose up -d --wait`. Os volumes do benchmark continuam guardados. Para voltar a eles, pare os bancos com `docker compose stop` e rode `restaurar`.
+2. **Calibrar o gerador numa máquina nova:** `python benchmark/calibrar.py`. Mede tudo com 8, 32 e 64 conexões e escolhe o maior número em que o gerador fica abaixo de 70% da sua cota de CPU, em cerca de 40 minutos ([calibração](../benchmark/README.md#calibração)).
+3. **Medir as quatro operações:** `python benchmark/medir.py`. O comando restaura a cópia, mede um lado por vez e salva os resultados em `benchmark/registros/`. Para apenas repor e conferir a base, use `python benchmark/base.py restaurar`. Veja as [opções de medição](../benchmark/README.md#gerador-de-carga).
+4. **Conferir a qualquer momento:** `python benchmark/base.py conferir`.
+5. **Voltar ao desenvolvimento:** `docker compose up -d --wait`. Os volumes do benchmark continuam guardados. Para voltar a eles, pare os bancos com `docker compose stop` e rode `restaurar`.
 
 Só um comando da base roda por vez. Cada `carregar`, `copiar` e `restaurar` grava os tempos e a memória medidos em `benchmark/registros/`, fora do Git. Os comandos, a trava e o que cada um faz com os volumes estão em [benchmark/README.md](../benchmark/README.md).
 
@@ -114,7 +115,7 @@ Só um comando da base roda por vez. Cada `carregar`, `copiar` e `restaurar` gra
 - **Ambiente:** `docker compose run --rm verificar` confere o Redis (réplica ligada e gravação em disco no padrão), o keyspace e as chaves de `cliques_por_link` no Cassandra, as tabelas, os índices e a confirmação de escrita do PostgreSQL, e se o MongoDB responde. Sai com código 1 se algo falhar. A lista completa está em [infra/README.md](../infra/README.md#como-usar).
 - **Base do benchmark** (CA-1 da [SPEC-005](specs/SPEC-005-testes-de-stress.md#critérios-de-aceitação)): `python benchmark/base.py conferir` consulta os próprios bancos e confere, link a link, que os dois lados têm os mesmos links e cliques, que o link popular tem 20% dos cliques e que os contadores batem com os cliques, em cerca de 45 s. Com `--completo`, lê os 10 milhões de cliques dos dois lados e confere a distribuição de dispositivos e a assinatura dos cliques, em cerca de 3 minutos. Termina com `CA-1 conferido.` ou com a lista do que falhou ([benchmark/README.md](../benchmark/README.md#conferência-ca-1)).
 - **Aplicação:** ainda sem testes. O passo 6 do plano da [SPEC-004](specs/SPEC-004-aplicacao.md#plano-de-implementação) prevê testes de aceitação para cada critério, inclusive com a réplica do Redis e o Cassandra fora do ar.
-- **Benchmark:** `python benchmark/medir.py` mede as quatro operações nos dois lados (CA-2 da SPEC-005, [benchmark/README.md](../benchmark/README.md#gerador-de-carga)). Ainda falta verificar a calibração, o pico de tráfego, a queda do Cassandra e a apresentação dos resultados ao vivo e gravados.
+- **Benchmark:** `python benchmark/medir.py` mede as quatro operações nos dois lados (CA-2 da SPEC-005, [benchmark/README.md](../benchmark/README.md#gerador-de-carga)), e `python benchmark/calibrar.py` confere que o gerador fica abaixo de 70% da sua cota com o número de conexões escolhido (CA-3, [calibração](../benchmark/README.md#calibração)). Ainda falta verificar o pico de tráfego, a queda do Cassandra e a apresentação dos resultados ao vivo e gravados.
 
 ## Como a aplicação funciona
 
@@ -128,7 +129,7 @@ A aplicação ainda não foi implementada. O que segue é o comportamento previs
 
 ## Como analisar os resultados do benchmark
 
-O gerador de carga já mede as quatro operações, mas a calibração, os cenários, a tela de testes e as execuções completas ainda não foram implementados (RM-31 a RM-33). Os números em [benchmark/README.md](../benchmark/README.md#gerador-de-carga) vêm de medições de desenvolvimento, sem calibração, e não valem para a apresentação.
+O gerador de carga já mede as quatro operações, e a calibração escolheu 8 conexões (RM-42). Os cenários, a tela de testes e as execuções completas ainda não foram implementados (RM-31 a RM-33). Os números em [benchmark/README.md](../benchmark/README.md#gerador-de-carga) vêm do computador de desenvolvimento e não valem para a apresentação; a calibração precisa ser repetida na máquina da apresentação.
 
 ### O que é comparado
 
@@ -141,7 +142,8 @@ A sequência de seis etapas está na [SPEC-005](specs/SPEC-005-testes-de-stress.
 - **Vazão:** operações concluídas com sucesso por segundo. Cada conexão espera a resposta antes de enviar o próximo pedido. Se o gerador demora para enviá-lo, o banco pode ficar à espera. Por isso, leia a vazão junto com o uso de CPU do gerador.
 - **Latência p50, p95 e p99:** o tempo abaixo do qual ficam 50%, 95% e 99% das operações. O p50 é o caso típico; o p95 e o p99 mostram as pausas e filas que a mediana esconde.
 - **Taxa de erro:** a fração das operações que falharam.
-- **CPU do gerador:** o percentual indica quanto do limite de CPU do próprio gerador foi usado. Para a comparação oficial, ele precisa ficar abaixo de 70% em cada etapa. A partir desse valor, o gerador pode estar limitando a carga que chega ao banco.
+- **CPU do gerador:** os núcleos usados pelo próprio gerador e o percentual da sua cota. Para a comparação oficial, o percentual precisa ficar abaixo de 70% em cada etapa. A partir desse valor, o gerador pode estar limitando a carga que chega ao banco.
+- **CPU do banco:** os núcleos usados pelo banco medido, na mesma janela. Um banco no teto, com o gerador abaixo de 70%, indica que o limite está no banco.
 - **Na queda do Cassandra:** os cliques que falharam ao gravar e a diferença entre o contador e o histórico, isto é, os cliques que o contador somou e o histórico não tem.
 
 ### Antes de comparar: a medição vale?
