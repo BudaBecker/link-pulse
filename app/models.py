@@ -18,7 +18,7 @@ URL_HTTP = TypeAdapter(HttpUrl)
 
 # Aceita "2026-12-25T23:59:59Z" e "2026-12-25T20:59:59-03:00"; recusa "1798243200" e "25/12/2026".
 INICIO_DATA_ISO = re.compile(r"\d{4}-\d\d-\d\dT")
-ALEM_DO_MICROSSEGUNDO = re.compile(r"(?<=\.\d{6})\d+")
+ALEM_DO_MICROSSEGUNDO = re.compile(r"(?<=[.,]\d{6})\d+")
 
 
 # Sem isso, o Pydantic aceitaria um timestamp Unix, em número ou em texto.

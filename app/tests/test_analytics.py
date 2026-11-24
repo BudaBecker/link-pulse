@@ -126,10 +126,13 @@ def test_janela_de_um_unico_instante(api, eventos):
         ("2026-11-20T12:00:00.000000000Z", "2026-11-20T12:00:00.000000001Z", 1),
     ],
 )
-def test_limites_com_fracao_de_milissegundo_respeitam_o_intervalo_fechado(api, sessao_cassandra, inicio, fim, esperado):
+@pytest.mark.parametrize("separador", [".", ","])
+def test_limites_com_fracao_de_milissegundo_respeitam_o_intervalo_fechado(
+    api, sessao_cassandra, inicio, fim, esperado, separador
+):
     codigo = criar_link(api, cliente_id="c3")
     gravar_cliques(sessao_cassandra, codigo, "2026-11-20T12:00:00.000Z")
-    janela = {"inicio": inicio, "fim": fim}
+    janela = {"inicio": inicio.replace(".", separador), "fim": fim.replace(".", separador)}
 
     assert consultar(api, "total", short_code=codigo, **janela).json()["cliques"] == esperado
     assert consultar(api, "por-dia", short_code=codigo, **janela).json()["dias"] == [
@@ -145,13 +148,15 @@ def test_limites_com_fracao_de_milissegundo_respeitam_o_intervalo_fechado(api, s
         ("2026-11-20T12:00:00.000000001Z", "2026-11-20T12:00:00.0000000005Z"),
     ],
 )
-def test_inicio_depois_do_fim_alem_do_microssegundo_responde_422(api, inicio, fim):
+@pytest.mark.parametrize("separador", [".", ","])
+def test_inicio_depois_do_fim_alem_do_microssegundo_responde_422(api, inicio, fim, separador):
     codigo = criar_link(api, cliente_id="c3")
-    janela = {"inicio": inicio, "fim": fim}
+    janela = {"inicio": inicio.replace(".", separador), "fim": fim.replace(".", separador)}
 
     assert consultar(api, "total", short_code=codigo, **janela).status_code == 422
     assert consultar(api, "por-dia", short_code=codigo, **janela).status_code == 422
     assert consultar(api, "por-canal", cliente_id="c3", **janela).status_code == 422
+
 
 def test_consultas_refletem_os_redirecionamentos(api, sessao_cassandra):
     codigo = criar_link(api, canal="instagram")
