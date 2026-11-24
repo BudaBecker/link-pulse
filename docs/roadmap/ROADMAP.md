@@ -10,7 +10,7 @@ Plano de tarefas do LinkPulse. Cada tarefa tem uma issue no GitHub, com o marco 
 | **M1 — Modelagem inicial** | Descrição do problema, modelagem e justificativa, conforme o checklist da [DISCIPLINA](../produto/DISCIPLINA.md) ([ADR-0011](../decisoes/ADR-0011-marco-1-so-documentacao.md)) | Concluído |
 | **M2 — Sistema completo** | Benchmark SQL x NoSQL sobre uma aplicação simples, com banco de Documentos para as campanhas ([ADR-0012](../decisoes/ADR-0012-marco-2-benchmark-sql-x-nosql.md); stack em [ADR-0013](../decisoes/ADR-0013-stack-e-ambiente-do-marco-2.md)) | Em andamento; apresentação em 25/11/2026 |
 
-Tarefas de código começam quando a spec correspondente estiver `Pronta`. Cada passo do plano de uma spec é uma tarefa: os que já tinham tarefa própria (ambiente, carga de dados, tela de testes e execuções) mantêm o ID, e os demais são subtarefas de RM-30 e RM-31.
+Tarefas de código começam quando a spec correspondente estiver `Pronta`. Cada passo do plano de uma spec é uma tarefa: os que já tinham tarefa própria (ambiente, carga de dados, tela de testes e execuções) mantêm o ID, e os demais são subtarefas da implementação da aplicação (RM-30) e dos testes de carga (RM-31).
 
 ## Tarefas
 

@@ -8,9 +8,9 @@ Para um percurso pelo projeto inteiro (processo, arquitetura, como rodar, como c
 | --- | --- | --- |
 | [produto/](produto/README.md) | Problema, público, pitch e regras da disciplina | [VISAO.md](produto/VISAO.md) |
 | [arquitetura/](arquitetura/README.md) | Modelagem de dados, justificativa técnica e fluxos | [ARQUITETURA.md](arquitetura/ARQUITETURA.md) |
-| [requisitos/](requisitos/README.md) | RF, RNF e RN com origem e critério; questões abertas | [REQUISITOS.md](requisitos/REQUISITOS.md) |
+| [requisitos/](requisitos/README.md) | Funcionalidades, metas de qualidade, regras de negócio e questões abertas | [REQUISITOS.md](requisitos/REQUISITOS.md) |
 | [decisoes/](decisoes/README.md) | Registro de decisões (ADR) | [README](decisoes/README.md) |
-| [specs/](specs/README.md) | Especificações de entrega: plano e critérios de aceitação | [SPEC-004](specs/SPEC-004-aplicacao.md) |
+| [specs/](specs/README.md) | Especificações de entrega: plano e critérios de aceitação | [Aplicação](specs/SPEC-004-aplicacao.md) e [benchmark](specs/SPEC-005-testes-de-stress.md) |
 | [roadmap/](roadmap/README.md) | Marcos e tarefas, com uma issue no GitHub para cada tarefa | [ROADMAP.md](roadmap/ROADMAP.md) |
 
 ## Como as peças se ligam
@@ -21,4 +21,4 @@ produto/ + arquitetura/  ──origem──▶  requisitos/  ──cobertos por�
                                   questões respondidas            decisões (ADR)
 ```
 
-O processo está descrito em [ADR-0001](decisoes/ADR-0001-desenvolvimento-guiado-por-especificacoes.md). Regras de contribuição em [CONTRIBUTING](../CONTRIBUTING.md); instruções para agentes em [AGENTS](../AGENTS.md).
+O grupo registrou [como passa dos requisitos à implementação](decisoes/ADR-0001-desenvolvimento-guiado-por-especificacoes.md). Regras de contribuição em [CONTRIBUTING](../CONTRIBUTING.md); instruções para agentes em [AGENTS](../AGENTS.md).

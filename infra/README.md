@@ -19,7 +19,7 @@ As verificações de saúde (healthchecks), que o Docker repete para saber se ca
 O `verificar` confere, com as bibliotecas fixadas:
 
 - Redis: master com réplica ligada, e a gravação em disco no padrão da imagem: sem o registro de cada escrita (AOF) e com as fotografias periódicas da memória (RDB);
-- Cassandra: o keyspace (o equivalente a um banco de dados) com fator de replicação 1, isto é, cada dado em um só nó, e `cliques_por_link` com a chave e a ordem do ADR-0014;
+- Cassandra: o keyspace (o equivalente a um banco de dados) com fator de replicação 1, isto é, cada dado em um só nó, e `cliques_por_link` com os cliques agrupados por link e ordenados do mais recente ao mais antigo, conforme o [modelo de dados](../docs/decisoes/ADR-0014-modelo-de-dados-e-metodo-do-benchmark.md#cliques-no-mesmo-milissegundo);
 - PostgreSQL: tabelas sem chave estrangeira, só com os índices das chaves primárias, e com `synchronous_commit` no padrão, que só confirma a escrita depois de gravá-la no disco;
 - MongoDB: respondendo.
 

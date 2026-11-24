@@ -1,4 +1,4 @@
-# Base de referência do benchmark
+# Benchmark do LinkPulse
 
 O benchmark do LinkPulse compara as mesmas operações no lado NoSQL (Redis e Cassandra) e no PostgreSQL, e a comparação só vale se os dois lados tiverem exatamente os mesmos dados. Esta pasta carrega esses dados, sempre iguais para a mesma semente, nos dois lados: clientes, links e cliques. Depois guarda uma cópia dos volumes dos bancos, para voltar a esse estado antes de cada repetição das medições. A pasta também tem o [gerador de carga](#gerador-de-carga), que mede as quatro operações sobre essa base. A base é o passo 1 do plano dos testes de stress ([SPEC-005](../docs/specs/SPEC-005-testes-de-stress.md#plano-de-implementação)), na tarefa de carregar os dados de referência nos dois lados (RM-29). Os dados seguem o modelo e o método do benchmark ([ADR-0014](../docs/decisoes/ADR-0014-modelo-de-dados-e-metodo-do-benchmark.md#dados-e-durações)).
 
@@ -11,8 +11,8 @@ Os comandos rodam no próprio computador, fora dos contêineres, na raiz do repo
 | Ação | Comando |
 | --- | --- |
 | Carregar a base do zero, conferir e guardar a cópia | `python benchmark/base.py carregar` |
-| Voltar os bancos à cópia e conferir o CA-1 | `python benchmark/base.py restaurar` (`--sem-conferir` pula a conferência) |
-| Conferir o CA-1 | `python benchmark/base.py conferir` |
+| Restaurar a cópia e conferir os links, os cliques e os contadores | `python benchmark/base.py restaurar` (`--sem-conferir` pula a conferência) |
+| Conferir os dados dos dois lados | `python benchmark/base.py conferir` |
 | Conferir também dispositivos e assinatura, lendo todos os cliques | `python benchmark/base.py conferir --completo` |
 | Guardar de novo a cópia do estado atual | `python benchmark/base.py copiar` |
 | Só reescrever o espelho do manifesto, sem mudar a base carregada | `python benchmark/base.py manifesto` |
@@ -20,7 +20,7 @@ Os comandos rodam no próprio computador, fora dos contêineres, na raiz do repo
 
 `carregar` e `manifesto` aceitam `--semente`, `--fim` (instante final, em ISO 8601 com fuso, como `2026-11-01T00:00:00Z`, entre 2000 e 2100) e `--processos` (padrão 4). Um `--fim` fora dessa regra é recusado antes de qualquer coisa ser gerada, gravada ou apagada. O manifesto gerado também passa pela validação antes de ir para o espelho e, na carga, antes de os volumes serem apagados. Cada `carregar`, `copiar` e `restaurar` grava os tempos e a memória medidos em `benchmark/registros/`, fora do Git.
 
-**Um comando por vez.** `copiar` e `restaurar` deixam os bancos parados enquanto trocam os volumes, e outro comando no meio poderia religá-los. Por isso `carregar`, `copiar`, `restaurar` e `conferir` pegam uma trava: um contêiner com nome fixo, `linkpulse-benchmark-trava`, que o Docker não deixa existir duas vezes. Os volumes e o projeto Compose também têm nome fixo, então a trava vale para qualquer cópia do repositório que use o mesmo Docker. Enquanto um comando roda, os outros saem com erro e dizem qual comando, processo e pasta estão com a trava. O contêiner da trava lê a entrada padrão do comando: quando o comando termina ou morre, essa entrada se fecha, o contêiner sai e o Docker o apaga (`--rm`).
+**Um comando por vez.** `copiar` e `restaurar` deixam os bancos parados enquanto trocam os volumes, e outro comando no meio poderia religá-los. Por isso os comandos `carregar`, `copiar`, `restaurar`, `conferir` e o script de medição usam a mesma trava: um contêiner com nome fixo, `linkpulse-benchmark-trava`, que o Docker não deixa existir duas vezes. Os volumes e o projeto Compose também têm nome fixo, então a trava vale para qualquer cópia do repositório que use o mesmo Docker. Enquanto um comando roda, os outros saem com erro e dizem qual comando, processo e pasta estão com a trava. O contêiner da trava lê a entrada padrão do comando: quando o comando termina ou morre, essa entrada se fecha, o contêiner sai e o Docker o apaga (`--rm`).
 
 Os contêineres que os comandos criam para mexer na base (cópia de volumes, leitura e gravação do manifesto, `carga`) levam o rótulo `linkpulse.benchmark.auxiliar` e podem continuar no Docker depois que o comando morre. Por isso, logo depois de pegar a trava, o comando espera terminar qualquer auxiliar de um comando anterior e avisa quais está esperando. Um auxiliar criado e ainda não iniciado (estado `created`) é removido, sem forçar: se ele começar a rodar no meio da remoção, o Docker recusa e ele passa a ser esperado. Ele é removido porque nenhum comando vivo vai iniciá-lo e o cliente do Docker do comando morto ainda poderia fazer isso no meio da operação. A conferência roda o contêiner `carga` com `--no-deps`, que não sobe os bancos de que ele depende, e recusa bancos parados: ela nunca liga um banco.
 
@@ -197,7 +197,7 @@ Dispositivos, nos dois lados e lidos linha a linha: 6.000.000 `mobile` (60%), 3.
 
 ## Gerador de carga
 
-O gerador mede as quatro operações do produto nos dois lados, em laço fechado: um número fixo de conexões, e cada uma só envia a próxima operação quando a anterior responde ([ADR-0014](../docs/decisoes/ADR-0014-modelo-de-dados-e-metodo-do-benchmark.md#como-a-carga-é-aplicada)). É o passo 2 do plano da [SPEC-005](../docs/specs/SPEC-005-testes-de-stress.md#plano-de-implementação) (RM-41). A calibração, o pico, a queda do Cassandra e a tela de testes ficam para RM-42 a RM-44 e RM-32.
+O gerador mede as quatro operações do produto nos dois lados, em laço fechado: um número fixo de conexões, e cada uma só envia a próxima operação quando a anterior responde ([ADR-0014](../docs/decisoes/ADR-0014-modelo-de-dados-e-metodo-do-benchmark.md#como-a-carga-é-aplicada)). O gerador já mede leitura de link, incremento do contador, gravação de clique e consulta ao histórico. A calibração, os cenários de pico e de queda do Cassandra e a tela de resultados são as próximas entregas do [plano de testes](../docs/specs/SPEC-005-testes-de-stress.md#plano-de-implementação).
 
 | Ação | Comando |
 | --- | --- |
@@ -207,7 +207,7 @@ O gerador mede as quatro operações do produto nos dois lados, em laço fechado
 
 `--conexoes` vale 8 por padrão, até a calibração escolher entre 8, 32 e 64. `--duracao` (60 s) e `--aquecimento` (10 s) seguem a execução completa.
 
-O [medir.py](medir.py) roda no computador, como o `base.py`, e pega a mesma trava: nenhum comando da base roda no meio de uma medição. Ele restaura a base antes de começar e de novo antes do histórico por período, se uma escrita rodou antes dele ([SPEC-005](../docs/specs/SPEC-005-testes-de-stress.md#sequência-de-testes)). As operações seguem a ordem da sequência de testes, um lado de cada vez. Cada execução é um contêiner `gerador` (4 CPUs, 1 GB), que roda o [gerador.py](gerador.py). O resultado vai para `benchmark/registros/`, fora do Git, e o resumo sai em tabela no fim.
+O [medir.py](medir.py) roda no computador, como o `base.py`, e pega a mesma trava: nenhum comando da base roda no meio de uma medição. Por padrão, ele restaura a base antes de começar e de novo antes do histórico por período, se uma escrita rodou antes dele ([SPEC-005](../docs/specs/SPEC-005-testes-de-stress.md#sequência-de-testes)). As operações seguem a ordem da sequência de testes, um lado de cada vez. Cada execução é um contêiner `gerador` (4 CPUs, 1 GB), que roda o [gerador.py](gerador.py). O resultado vai para `benchmark/registros/`, fora do Git, e o resumo sai em tabela no fim.
 
 ### O que cada operação executa
 
@@ -237,7 +237,7 @@ As operações que começam no aquecimento são descartadas, e só entram as que
 
 ### Execução de desenvolvimento
 
-Medido em 24/11/2026, no computador de desenvolvimento (o mesmo das [medições da base](#resultados-medidos)), com 8 conexões, 10 s de aquecimento e 60 s medidos por lado. A base foi restaurada antes do redirecionamento e antes do histórico, com o CA-1 conferido nas duas vezes. As duas linhas do Cassandra são de uma segunda execução, com uma conexão de dados por conexão pedida, também com a base restaurada antes de cada operação. É uma execução só, sem calibração e fora da máquina dedicada, e só mostra que o gerador produz as métricas (CA-2). Os números que valem são os da execução completa (RM-33).
+Medido em 24/11/2026, no computador de desenvolvimento (o mesmo das [medições da base](#resultados-medidos)), com 8 conexões, 10 s de aquecimento e 60 s medidos por lado. A base foi restaurada antes do redirecionamento e antes do histórico, com o CA-1 conferido nas duas vezes. As duas linhas do Cassandra são de uma segunda execução, com uma conexão de dados por conexão pedida, também com a base restaurada antes de cada operação. Essas medições de desenvolvimento confirmam que o gerador produz as métricas das quatro operações nos dois lados. A comparação para a apresentação depende da calibração e das repetições na máquina dedicada.
 
 | Operação | Lado | Operações | Vazão (ops/s) | p50 (ms) | p95 (ms) | p99 (ms) | Taxa de erro | CPU do gerador |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -250,4 +250,4 @@ Medido em 24/11/2026, no computador de desenvolvimento (o mesmo das [medições 
 | Histórico por período | NoSQL | 126.708 | 2.112 | 1,467 | 12,129 | 31,203 | 0% | 68,8% |
 | Histórico por período | PostgreSQL | 528.065 | 8.801 | 0,244 | 2,136 | 4,748 | 0% | 71,6% |
 
-**CPU do gerador acima de 70% com 8 conexões.** Nos dois lados do redirecionamento, no contador do Redis, no registro no Cassandra e no histórico no PostgreSQL, o gerador passou de 70% do seu limite já com 8 conexões. Nessas execuções, ele pode ser o gargalo e a medição não vale (CA-3). A calibração (RM-42) confere isso e aplica a regra do [ADR-0013](../docs/decisoes/ADR-0013-stack-e-ambiente-do-marco-2.md#decisão): reescrever o laço que dispara as operações, em Rust.
+**CPU do gerador acima de 70% com 8 conexões.** Nos dois lados do redirecionamento, no contador do Redis, no registro no Cassandra e no histórico no PostgreSQL, o gerador passou de 70% do seu limite já com 8 conexões. Nessas cinco medições, o gerador pode ter limitado a carga enviada aos bancos. A calibração verifica se o gerador fica abaixo de 70% da sua cota. Se atingir 70% ou mais já com oito conexões na calibração, a [decisão sobre o gerador](../docs/decisoes/ADR-0013-stack-e-ambiente-do-marco-2.md#decisão) prevê reescrever o trecho que envia as operações. A linguagem prevista é Rust.
