@@ -159,4 +159,4 @@ def contar_clique(
 
     # A resposta já saiu; o contador é soft state (RN-05).
     except redis.RedisError as erro:
-        log.warning("contador não somado em %s: %r", short_code, erro)
+        log.warning("incremento sem confirmação em %s: %r", short_code, erro)

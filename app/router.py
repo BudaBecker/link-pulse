@@ -1,10 +1,10 @@
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from app import service
-from app.models import NovaCampanha, NovoCliente, NovoLink
+from app.models import URL_HTTP, NovaCampanha, NovoCliente, NovoLink
 
 router = APIRouter()
 
@@ -74,15 +74,11 @@ def redirecionar(short_code: str, request: Request, tarefas: BackgroundTasks):
 
 
 def host_em_idna(url: str) -> str:
-    # O RedirectResponse codificaria "café" como "caf%C3%A9", e o cliente leria esse texto como host.
-    partes = urlsplit(url)
-    if partes.hostname.isascii():
+    # O RedirectResponse codificaria "café" como "caf%C3%A9". O validador do cadastro dá o mesmo
+    # host que ele aceitou ("faß" em "xn--fa-hia", e não "fass" como o codec idna do Python).
+    if urlsplit(url).hostname.isascii():
         return url
-
-    usuario, arroba, endereco = partes.netloc.rpartition("@")
-    host, dois_pontos, porta = endereco.partition(":")
-    netloc = usuario + arroba + host.encode("idna").decode("ascii") + dois_pontos + porta
-    return urlunsplit(partes._replace(netloc=netloc))
+    return str(URL_HTTP.validate_python(url))
 
 
 @router.get("/metricas")

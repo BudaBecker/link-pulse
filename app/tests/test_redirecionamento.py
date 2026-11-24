@@ -73,6 +73,9 @@ def test_link_com_expiracao_futura_redireciona(api):
     [
         ("https://café.example/oferta?q=a%20b", "https://xn--caf-dma.example/oferta?q=a%20b"),
         ("https://Café.example:8443/ação#topo", "https://xn--caf-dma.example:8443/a%C3%A7%C3%A3o#topo"),
+        ("https://faß.example/oferta", "https://xn--fa-hia.example/oferta"),
+        ("https://café.example/oferta?", "https://xn--caf-dma.example/oferta?"),
+        ("https://café.example/oferta#", "https://xn--caf-dma.example/oferta#"),
     ],
 )
 def test_dominio_com_acento_sai_em_idna(api, url, location):
