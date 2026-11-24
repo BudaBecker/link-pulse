@@ -56,11 +56,11 @@ Há dois conjuntos de dados para os mesmos bancos: os volumes de desenvolvimento
 
 ### Como testar e conferir
 
-`docker compose run --rm verificar` confere o ambiente. `python benchmark/base.py conferir` confirma que os dois lados do benchmark têm os mesmos links e cliques, e `--completo` compara também a distribuição de dispositivos e uma assinatura calculada sobre todos os cliques. O gerador já registra a vazão, os tempos de resposta e os erros nos dois lados, a calibração escolheu o número de conexões e o pico de tráfego terminou sem erros no lado NoSQL. Os testes da aplicação já cobrem o cadastro de cliente, a campanha, a criação de link e o redirecionamento, com o contador e a gravação do clique; faltam os das consultas e do painel, os da réplica e do Cassandra de fato parados, e o cenário de queda do Cassandra. Mais em [Como testar e conferir](docs/GUIA.md#como-testar-e-conferir).
+`docker compose run --rm verificar` confere o ambiente. `python benchmark/base.py conferir` confirma que os dois lados do benchmark têm os mesmos links e cliques, e `--completo` compara também a distribuição de dispositivos e uma assinatura calculada sobre todos os cliques. O gerador já registra a vazão, os tempos de resposta e os erros nos dois lados, a calibração escolheu o número de conexões e o pico de tráfego terminou sem erros no lado NoSQL. Os testes da aplicação já cobrem o cadastro de cliente, a campanha, a criação de link, o redirecionamento, com o contador e a gravação do clique, e as consultas de analytics; faltam os do painel, os da réplica e do Cassandra de fato parados, e o cenário de queda do Cassandra. Mais em [Como testar e conferir](docs/GUIA.md#como-testar-e-conferir).
 
 ### Como a aplicação funciona
 
-A aplicação já cadastra clientes e campanhas, cria links, redireciona e registra cada clique ([app/](app/README.md)); as consultas de analytics e o painel ainda não foram implementados. A [especificação da aplicação](docs/specs/SPEC-004-aplicacao.md) prevê uma API em Python com FastAPI e uma página HTML para cadastrar clientes e campanhas, criar links, redirecionar, registrar cada clique e mostrar o painel. Mais em [Como a aplicação funciona](docs/GUIA.md#como-a-aplicação-funciona).
+A aplicação já cadastra clientes e campanhas, cria links, redireciona, registra cada clique e responde às consultas de analytics ([app/](app/README.md)); o painel ainda não foi implementado. A [especificação da aplicação](docs/specs/SPEC-004-aplicacao.md) prevê uma API em Python com FastAPI e uma página HTML para cadastrar clientes e campanhas, criar links, redirecionar, registrar cada clique e mostrar o painel. Mais em [Como a aplicação funciona](docs/GUIA.md#como-a-aplicação-funciona).
 
 ### Como analisar os resultados do benchmark
 

@@ -6,3 +6,5 @@ cassandra-driver==3.30.1
 pyasyncore==1.0.5; sys_platform == "win32"
 psycopg[binary]==3.3.9
 pymongo==4.20.1
+# O Windows não traz a base de fusos do zoneinfo (Q-47).
+tzdata==2026.6
