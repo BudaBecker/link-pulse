@@ -2,11 +2,14 @@
 
 Mede uma operação em um lado: um número fixo de conexões, e cada uma só envia
 a próxima operação quando a anterior responde (ADR-0014). As conexões se
-dividem entre processos, com uma thread por conexão. Os comandos são
+dividem entre processos, por padrão um por conexão, com uma thread por
+conexão. Os comandos são
 preparados no Cassandra e no PostgreSQL; o Redis não tem comando preparado.
 
 Não é chamado à mão: `python benchmark/medir.py` roda este script no contêiner
-`gerador`. O resultado sai numa linha `RESULTADO {json}`.
+`gerador`. O resultado sai numa linha `RESULTADO {json}`; as linhas
+`JANELA inicio` e `JANELA fim` marcam a janela medida, para o medir.py ler a
+CPU do banco no mesmo intervalo.
 """
 
 from __future__ import annotations
@@ -181,6 +184,13 @@ def cpu_usada_s() -> float:
     raise RuntimeError("cpu.stat sem usage_usec")
 
 
+def memoria_pico_mib() -> float | None:
+    try:
+        return round(int((CGROUP / "memory.peak").read_text()) / 2**20, 1)
+    except OSError:
+        return None
+
+
 def percentil(ordenadas: list[float], p: float) -> float | None:
     if not ordenadas:
         return None
@@ -203,7 +213,7 @@ def main() -> int:
     parser.add_argument("--conexoes", type=int, default=8)
     parser.add_argument("--duracao", type=float, default=60)
     parser.add_argument("--aquecimento", type=float, default=10)
-    parser.add_argument("--processos", type=int, help="padrão: as CPUs do limite do contêiner")
+    parser.add_argument("--processos", type=int, help="padrão: um por conexão")
     args = parser.parse_args()
 
     manifesto = json.loads(MANIFESTO.read_text(encoding="utf-8"))
@@ -216,7 +226,7 @@ def main() -> int:
     janela = tuple(datetime.fromisoformat(manifesto["janela_historico"][k]) for k in ("inicio", "fim"))
 
     limite_cpu = cpus_do_limite()
-    processos = max(1, min(args.conexoes, args.processos or math.floor(limite_cpu)))
+    processos = max(1, min(args.conexoes, args.processos or args.conexoes))
     divisao = [args.conexoes // processos + (1 if i < args.conexoes % processos else 0) for i in range(processos)]
 
     ctx = get_context("spawn")
@@ -241,8 +251,10 @@ def main() -> int:
 
     time.sleep(max(0.0, marcos[0] - time.perf_counter()))
     cpu_antes, relogio_antes = cpu_usada_s(), time.perf_counter()
+    print("JANELA inicio", flush=True)
     time.sleep(max(0.0, marcos[1] - time.perf_counter()))
     cpu_depois, relogio_depois = cpu_usada_s(), time.perf_counter()
+    print("JANELA fim", flush=True)
 
     latencias, erros, exemplos = array("d"), 0, []
     for _ in filhos:
@@ -256,6 +268,7 @@ def main() -> int:
     for filho in filhos:
         filho.join()
 
+    nucleos = (cpu_depois - cpu_antes) / (relogio_depois - relogio_antes)
     ordenadas = sorted(latencias)
     total = len(ordenadas) + erros
     ms = lambda s: None if s is None else round(s * 1000, 3)  # noqa: E731
@@ -274,8 +287,10 @@ def main() -> int:
         "p95_ms": ms(percentil(ordenadas, 95)),
         "p99_ms": ms(percentil(ordenadas, 99)),
         "taxa_erro": round(erros / total, 6) if total else None,
-        "cpu_gerador_pct": round(100 * (cpu_depois - cpu_antes) / ((relogio_depois - relogio_antes) * limite_cpu), 1),
+        "cpu_gerador_nucleos": round(nucleos, 2),
+        "cpu_gerador_pct": round(100 * nucleos / limite_cpu, 1),
         "limite_cpu_gerador": limite_cpu,
+        "memoria_pico_gerador_mib": memoria_pico_mib(),
         "exemplos_de_erro": exemplos[:3],
     }
     print("RESULTADO " + json.dumps(resultado, ensure_ascii=False), flush=True)
