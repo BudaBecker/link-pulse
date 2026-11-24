@@ -120,9 +120,13 @@ def test_janela_de_um_unico_instante(api, eventos):
         ("2026-11-20T11:59:59Z", "2026-11-20T11:59:59.999900Z", 0),
         ("2026-11-20T12:00:00.000100Z", "2026-11-20T12:00:00.000900Z", 0),
         ("2026-11-20T11:59:59.999500Z", "2026-11-20T12:00:00.000900Z", 1),
+        ("2026-11-20T12:00:00.000000001Z", "2026-11-20T12:00:00.001Z", 0),
+        ("2026-11-20T12:00:00.000000001Z", "2026-11-20T12:00:00.000000002Z", 0),
+        ("2026-11-20T12:00:00.0000000002Z", "2026-11-20T12:00:00.000000001Z", 0),
+        ("2026-11-20T12:00:00.000000000Z", "2026-11-20T12:00:00.000000001Z", 1),
     ],
 )
-def test_limites_com_microssegundos_respeitam_o_intervalo_fechado(api, sessao_cassandra, inicio, fim, esperado):
+def test_limites_com_fracao_de_milissegundo_respeitam_o_intervalo_fechado(api, sessao_cassandra, inicio, fim, esperado):
     codigo = criar_link(api, cliente_id="c3")
     gravar_cliques(sessao_cassandra, codigo, "2026-11-20T12:00:00.000Z")
     janela = {"inicio": inicio, "fim": fim}
@@ -133,6 +137,21 @@ def test_limites_com_microssegundos_respeitam_o_intervalo_fechado(api, sessao_ca
     ]
     assert consultar(api, "por-canal", cliente_id="c3", **janela).json()["canais"][0]["cliques"] == esperado
 
+
+@pytest.mark.parametrize(
+    ("inicio", "fim"),
+    [
+        ("2026-11-20T12:00:00.000000001Z", "2026-11-20T12:00:00.000000000Z"),
+        ("2026-11-20T12:00:00.000000001Z", "2026-11-20T12:00:00.0000000005Z"),
+    ],
+)
+def test_inicio_depois_do_fim_alem_do_microssegundo_responde_422(api, inicio, fim):
+    codigo = criar_link(api, cliente_id="c3")
+    janela = {"inicio": inicio, "fim": fim}
+
+    assert consultar(api, "total", short_code=codigo, **janela).status_code == 422
+    assert consultar(api, "por-dia", short_code=codigo, **janela).status_code == 422
+    assert consultar(api, "por-canal", cliente_id="c3", **janela).status_code == 422
 
 def test_consultas_refletem_os_redirecionamentos(api, sessao_cassandra):
     codigo = criar_link(api, canal="instagram")

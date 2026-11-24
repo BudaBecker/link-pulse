@@ -91,7 +91,7 @@ def metricas(request: Request) -> dict:
 def cliques_por_dia(janela: Annotated[JanelaDoLink, Query()], request: Request) -> dict:
     estado = request.app.state
     try:
-        return analytics.cliques_por_dia(estado.master, estado.consultas, janela.short_code, janela.inicio, janela.fim)
+        return analytics.cliques_por_dia(estado.master, estado.consultas, janela.short_code, janela)
 
     except analytics.LinkInexistente as erro:
         raise HTTPException(404, str(erro)) from erro
@@ -100,14 +100,14 @@ def cliques_por_dia(janela: Annotated[JanelaDoLink, Query()], request: Request) 
 @router.get("/analytics/por-canal")
 def cliques_por_canal(janela: Annotated[JanelaDoCliente, Query()], request: Request) -> dict:
     estado = request.app.state
-    return analytics.cliques_por_canal(estado.master, estado.consultas, janela.cliente_id, janela.inicio, janela.fim)
+    return analytics.cliques_por_canal(estado.master, estado.consultas, janela.cliente_id, janela)
 
 
 @router.get("/analytics/total")
 def total_de_cliques(janela: Annotated[JanelaDoLink, Query()], request: Request) -> dict:
     estado = request.app.state
     try:
-        return analytics.total_de_cliques(estado.master, estado.consultas, janela.short_code, janela.inicio, janela.fim)
+        return analytics.total_de_cliques(estado.master, estado.consultas, janela.short_code, janela)
 
     except analytics.LinkInexistente as erro:
         raise HTTPException(404, str(erro)) from erro
