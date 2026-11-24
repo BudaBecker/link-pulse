@@ -56,11 +56,11 @@ Há dois conjuntos de dados para os mesmos bancos: os volumes de desenvolvimento
 
 ### Como testar e conferir
 
-`docker compose run --rm verificar` confere o ambiente. `python benchmark/base.py conferir` confirma que os dois lados do benchmark têm os mesmos links e cliques, e `--completo` compara também a distribuição de dispositivos e uma assinatura calculada sobre todos os cliques. O gerador já registra a vazão, os tempos de resposta e os erros nos dois lados, a calibração escolheu o número de conexões e o pico de tráfego terminou sem erros no lado NoSQL. Ainda faltam os testes da aplicação e o cenário de queda do Cassandra. Mais em [Como testar e conferir](docs/GUIA.md#como-testar-e-conferir).
+`docker compose run --rm verificar` confere o ambiente. `python benchmark/base.py conferir` confirma que os dois lados do benchmark têm os mesmos links e cliques, e `--completo` compara também a distribuição de dispositivos e uma assinatura calculada sobre todos os cliques. O gerador já registra a vazão, os tempos de resposta e os erros nos dois lados, a calibração escolheu o número de conexões e o pico de tráfego terminou sem erros no lado NoSQL. Os testes da aplicação já cobrem o cadastro de cliente, a campanha e a criação de link; faltam os do redirecionamento e do painel, e o cenário de queda do Cassandra. Mais em [Como testar e conferir](docs/GUIA.md#como-testar-e-conferir).
 
 ### Como a aplicação funciona
 
-A aplicação ainda não foi implementada. A [especificação da aplicação](docs/specs/SPEC-004-aplicacao.md) prevê uma API em Python com FastAPI e uma página HTML para cadastrar clientes e campanhas, criar links, redirecionar, registrar cada clique e mostrar o painel. Mais em [Como a aplicação funciona](docs/GUIA.md#como-a-aplicação-funciona).
+A aplicação já cadastra clientes e campanhas e cria links ([app/](app/README.md)); o redirecionamento e o painel ainda não foram implementados. A [especificação da aplicação](docs/specs/SPEC-004-aplicacao.md) prevê uma API em Python com FastAPI e uma página HTML para cadastrar clientes e campanhas, criar links, redirecionar, registrar cada clique e mostrar o painel. Mais em [Como a aplicação funciona](docs/GUIA.md#como-a-aplicação-funciona).
 
 ### Como analisar os resultados do benchmark
 
@@ -81,6 +81,7 @@ A calibração escolheu 8 conexões, o maior número em que o gerador fica abaix
 | [docs/specs/](docs/specs/README.md) | Especificações com plano e critérios de aceitação |
 | [docs/roadmap/](docs/roadmap/README.md) | Marcos e tarefas |
 | [infra/](infra/README.md) | Ambiente local em Docker Compose, versões fixadas e consumo medido |
+| [app/](app/README.md) | A API da aplicação: como rodar, rotas e testes |
 | [benchmark/](benchmark/README.md) | Como preparar e conferir a base, rodar o gerador e ler as medições |
 
 ## Contribuindo
