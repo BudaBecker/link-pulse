@@ -45,12 +45,12 @@ class NovoLink(BaseModel):
         except ValidationError:
             raise ValueError("url deve ser absoluta, http ou https, com host válido") from None
         
-        # O HttpUrl ignora espaços nas pontas, mas o texto gravado os manteria.
         # O HttpUrl corrige "https:/host" e "https:///host"; o texto gravado precisa ter o host.
         if not urlsplit(valor).hostname:
             raise ValueError("url deve ter host")
-        if valor != valor.strip():
-            raise ValueError("url não pode ter espaços no início ou no fim")
+        # O HttpUrl remove ou codifica espaços, mas o texto gravado os manteria.
+        if any(c.isspace() for c in valor):
+            raise ValueError("url não pode ter espaços; use %20")
         return valor
 
     # Sem isso, o Pydantic aceitaria um timestamp Unix, em número ou em texto.

@@ -32,6 +32,15 @@ def test_link_grava_url_cliente_e_criado_em(api, master):
     assert master.smembers("links:cliente:c1") == {codigo}
 
 
+def test_url_com_espaco_codificado_e_gravada_como_veio(api, master):
+    url = "https://exemplo.com/ofertas%20de%20natal"
+
+    resposta = api.post("/links", json={"url": url, "cliente_id": "c1"})
+
+    assert resposta.status_code == 201
+    assert master.hget(f"link:{resposta.json()['short_code']}", "url") == url
+
+
 def test_link_grava_canal_e_expira_em_em_utc(api, master):
     corpo = {
         "url": "http://exemplo.com.br/a?b=1",
@@ -79,6 +88,7 @@ def test_link_sem_cliente_e_rejeitado(api, master, corpo):
         "https:///loja.example/oferta",
         " https://exemplo.com.br",
         "https://exemplo.com.br ",
+        "https://exemplo.com/ofertas de natal",
     ],
 )
 def test_url_invalida_nao_grava_nada(api, master, campanhas, criar_campanha, url):
