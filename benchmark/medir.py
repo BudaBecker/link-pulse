@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import subprocess
 import sys
 
@@ -63,8 +64,8 @@ def positivo(tipo, zero: bool = False):
     """Tipo do argparse que recusa negativos, e zero se zero=False, antes de pegar a trava."""
     def converter(texto: str):
         valor = tipo(texto)
-        if valor < 0 or (valor == 0 and not zero):
-            raise argparse.ArgumentTypeError(f"precisa ser {'>= 0' if zero else '> 0'}")
+        if not math.isfinite(valor) or valor < 0 or (valor == 0 and not zero):
+            raise argparse.ArgumentTypeError(f"precisa ser finito e {'>= 0' if zero else '> 0'}")
         return valor
     return converter
 
