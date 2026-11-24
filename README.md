@@ -64,7 +64,7 @@ A aplicação ainda não foi implementada. A [SPEC-004](docs/specs/SPEC-004-apli
 
 ### Como analisar os resultados do benchmark
 
-O benchmark mede quatro operações do produto (redirecionamento, contador, registro de clique e histórico por período) no Redis e no Cassandra e, para comparação, no PostgreSQL, com vazão, latência p50, p95 e p99 e taxa de erro ([ADR-0012](docs/decisoes/ADR-0012-marco-2-benchmark-sql-x-nosql.md)). O gerador de carga e a tela de testes ainda não foram implementados ([SPEC-005](docs/specs/SPEC-005-testes-de-stress.md)). Não há placar esperado: os números entram na apresentação como saírem. Esperam-se zero erros no lado NoSQL no pico de tráfego e, com o Cassandra fora do ar, redirecionamentos respondendo `302` com p95 abaixo de 50 ms. Como ler os números e os limites da comparação em [Como analisar os resultados do benchmark](docs/GUIA.md#como-analisar-os-resultados-do-benchmark).
+O benchmark mede quatro operações do produto (redirecionamento, contador, registro de clique e histórico por período) no Redis e no Cassandra e, para comparação, no PostgreSQL, com vazão, latência p50, p95 e p99 e taxa de erro ([ADR-0012](docs/decisoes/ADR-0012-marco-2-benchmark-sql-x-nosql.md)). O gerador de carga já mede as quatro operações; a calibração, os cenários e a tela de testes ainda não foram implementados ([SPEC-005](docs/specs/SPEC-005-testes-de-stress.md)). Não há placar esperado: os números entram na apresentação como saírem. Esperam-se zero erros no lado NoSQL no pico de tráfego e, com o Cassandra fora do ar, redirecionamentos respondendo `302` com p95 abaixo de 50 ms. Como ler os números e os limites da comparação em [Como analisar os resultados do benchmark](docs/GUIA.md#como-analisar-os-resultados-do-benchmark).
 
 ## Documentação
 

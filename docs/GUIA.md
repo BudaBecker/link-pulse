@@ -37,7 +37,7 @@ Os critérios de aceitação são numerados dentro de cada spec: "CA-1 da SPEC-0
 | Ambiente local | Passo 1 da [SPEC-004](specs/SPEC-004-aplicacao.md#plano-de-implementação) (RM-24) | [infra/](../infra/README.md), [docker-compose.yml](../docker-compose.yml), [Dockerfile](../Dockerfile) |
 | Base de referência do benchmark | Passo 1 da [SPEC-005](specs/SPEC-005-testes-de-stress.md#plano-de-implementação) (RM-29) | [benchmark/](../benchmark/README.md), [docker-compose.benchmark.yml](../docker-compose.benchmark.yml) |
 | Aplicação | Passos 2 a 6 da SPEC-004 (RM-30) | Planejada |
-| Gerador de carga, calibração e cenários | Passos 2 a 5 da SPEC-005 (RM-31) | Planejado |
+| Gerador de carga, calibração e cenários | Passos 2 a 5 da SPEC-005 (RM-31) | Gerador em laço fechado das quatro operações em [benchmark/](../benchmark/README.md#gerador-de-carga) (RM-41); calibração e cenários planejados |
 | Tela de testes | Passo 6 da SPEC-005 (RM-32) | Planejada |
 | Execuções completas, com o resultado salvo | Passo 7 da SPEC-005 (RM-33) | Planejadas |
 
@@ -114,7 +114,7 @@ Só um comando da base roda por vez. Cada `carregar`, `copiar` e `restaurar` gra
 - **Ambiente:** `docker compose run --rm verificar` confere o Redis (réplica ligada e gravação em disco no padrão), o keyspace e as chaves de `cliques_por_link` no Cassandra, as tabelas, os índices e a confirmação de escrita do PostgreSQL, e se o MongoDB responde. Sai com código 1 se algo falhar. A lista completa está em [infra/README.md](../infra/README.md#como-usar).
 - **Base do benchmark** (CA-1 da [SPEC-005](specs/SPEC-005-testes-de-stress.md#critérios-de-aceitação)): `python benchmark/base.py conferir` consulta os próprios bancos e confere, link a link, que os dois lados têm os mesmos links e cliques, que o link popular tem 20% dos cliques e que os contadores batem com os cliques, em cerca de 45 s. Com `--completo`, lê os 10 milhões de cliques dos dois lados e confere a distribuição de dispositivos e a assinatura dos cliques, em cerca de 3 minutos. Termina com `CA-1 conferido.` ou com a lista do que falhou ([benchmark/README.md](../benchmark/README.md#conferência-ca-1)).
 - **Aplicação:** ainda sem testes. O passo 6 do plano da [SPEC-004](specs/SPEC-004-aplicacao.md#plano-de-implementação) prevê testes de aceitação para cada critério, inclusive com a réplica do Redis e o Cassandra fora do ar.
-- **Benchmark:** os critérios 2 a 8 da SPEC-005 serão verificados nas tarefas do gerador de carga, da tela de testes e das execuções completas (RM-31 a RM-33).
+- **Benchmark:** `python benchmark/medir.py` mede as quatro operações nos dois lados (CA-2 da SPEC-005, [benchmark/README.md](../benchmark/README.md#gerador-de-carga)). Os critérios 3 a 8 serão verificados nas tarefas da calibração, dos cenários, da tela de testes e das execuções completas (RM-31 a RM-33).
 
 ## Como a aplicação funciona
 
@@ -128,7 +128,7 @@ A aplicação ainda não foi implementada. O que segue é o comportamento previs
 
 ## Como analisar os resultados do benchmark
 
-O gerador de carga, a tela de testes e as execuções completas ainda não foram implementados (RM-31 a RM-33). Os tempos já publicados em [benchmark/README.md](../benchmark/README.md#resultados-medidos) são de carga e de restauração da base, não de desempenho dos bancos.
+O gerador de carga já mede as quatro operações, mas a calibração, os cenários, a tela de testes e as execuções completas ainda não foram implementados (RM-31 a RM-33). Os números em [benchmark/README.md](../benchmark/README.md#gerador-de-carga) são de uma execução de desenvolvimento, sem calibração, e não valem para a apresentação.
 
 ### O que é comparado
 
