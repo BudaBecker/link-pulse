@@ -76,11 +76,16 @@ def executar(operacao: str, lado: str, conexoes: int, args: argparse.Namespace) 
     resultado |= {"banco": banco, "cpu_banco_nucleos": round(nucleos, 2),
                   "cpu_banco_pct": round(100 * nucleos / teto, 1), "limite_cpu_banco": teto}
     print(f"  vazão {resultado['vazao_ops']:,.0f} ops/s · p50 {resultado['p50_ms']} ms · "
-          f"p95 {resultado['p95_ms']} ms · p99 {resultado['p99_ms']} ms · erros {resultado['taxa_erro']:.4%}\n"
+          f"p95 {resultado['p95_ms']} ms · p99 {resultado['p99_ms']} ms · erros {taxa(resultado['taxa_erro'])}\n"
           f"  CPU do gerador {resultado['cpu_gerador_nucleos']} núcleos ({resultado['cpu_gerador_pct']}%) · "
           f"CPU do {banco} {resultado['cpu_banco_nucleos']} núcleos ({resultado['cpu_banco_pct']}%) · "
           f"pico de memória do gerador {resultado['memoria_pico_gerador_mib']} MiB")
     return resultado
+
+
+def taxa(valor: float | None) -> str:
+    """Sem tentativas na janela, a taxa de erro é nula; a calibração trata como medição inválida."""
+    return "—" if valor is None else f"{valor:.4%}"
 
 
 def tabela(execucoes: list[dict]) -> None:
@@ -89,7 +94,7 @@ def tabela(execucoes: list[dict]) -> None:
     print("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |")
     for e in execucoes:
         print(f"| {e['conexoes']} | {e['operacao']} | {NOMES[e['lado']]} | {e['vazao_ops']:,.0f} | {e['p50_ms']} | "
-              f"{e['p95_ms']} | {e['p99_ms']} | {e['taxa_erro']:.4%} | "
+              f"{e['p95_ms']} | {e['p99_ms']} | {taxa(e['taxa_erro'])} | "
               f"{e['cpu_gerador_nucleos']} ({e['cpu_gerador_pct']}%) | "
               f"{e['cpu_banco_nucleos']} ({e['cpu_banco_pct']}%) | {e['memoria_pico_gerador_mib']} |")
 
