@@ -68,6 +68,20 @@ def test_link_com_expiracao_futura_redireciona(api):
     assert resposta.headers["location"] == URL
 
 
+@pytest.mark.parametrize(
+    ("url", "location"),
+    [
+        ("https://café.example/oferta?q=a%20b", "https://xn--caf-dma.example/oferta?q=a%20b"),
+        ("https://Café.example:8443/ação#topo", "https://xn--caf-dma.example:8443/a%C3%A7%C3%A3o#topo"),
+    ],
+)
+def test_dominio_com_acento_sai_em_idna(api, url, location):
+    resposta = acessar(api, criar_link(api, url=url))
+
+    assert resposta.status_code == 302
+    assert resposta.headers["location"] == location
+
+
 def test_link_expirado_responde_410_sem_contar_nem_gravar(api, master, sessao_cassandra):
     codigo = criar_link(api, expira_em="2026-01-01T00:00:00-03:00")
 
@@ -156,6 +170,32 @@ def test_acessos_concorrentes_somam_exatamente_n(api, master, sessao_cassandra):
     assert {r.status_code for r in respostas} == {302}
     assert master.get(f"contador:{codigo}") == str(n)
     assert len(esperar_cliques(sessao_cassandra, codigo, n)) == n
+
+
+class SemCassandra:
+    def registrar(self, *args):
+        pass
+
+
+def test_confirmacao_perdida_do_incr_nao_soma_duas_vezes(master, monkeypatch, caplog):
+    ler = redis.connection.Connection.read_response
+    perdidas = []
+
+    # O Redis aplica o INCR, mas a resposta não chega: repetir o comando somaria de novo.
+    def perder_a_primeira(self, *args, **kwargs):
+        resposta = ler(self, *args, **kwargs)
+        if not perdidas:
+            perdidas.append(resposta)
+            raise redis.ConnectionError("confirmação perdida")
+        return resposta
+
+    monkeypatch.setattr(redis.connection.Connection, "read_response", perder_a_primeira)
+    with caplog.at_level(logging.WARNING, logger="app.service"):
+        service.contar_clique(master, SemCassandra(), "AAAAAAA", None, None)
+    monkeypatch.undo()
+
+    assert master.get("contador:AAAAAAA") == "1"
+    assert "AAAAAAA" in caplog.text
 
 
 class FuturoComFalha:

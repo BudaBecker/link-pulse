@@ -25,7 +25,7 @@ A aplicação roda no computador, fora do Docker, e usa os bancos do [ambiente d
 
 3. Suba a API: `.venv/Scripts/python -m uvicorn app.main:app --port 8000`.
 
-A documentação interativa das rotas fica em `http://127.0.0.1:8000/docs`. A API conecta ao Cassandra ao subir, então ele precisa estar no ar nesse momento; depois, uma queda do Cassandra não interrompe os redirecionamentos.
+A documentação interativa das rotas fica em `http://127.0.0.1:8000/docs`. A API conecta ao Cassandra ao subir, então ele precisa estar no ar nesse momento. Depois, uma queda do Cassandra não interrompe os redirecionamentos, e o driver reconecta sozinho quando ele volta. Subir a API durante uma queda fica fora do ambiente controlado da demonstração, em que os bancos sobem com `--wait` antes da API (Q-44).
 
 Por padrão, a aplicação usa estes bancos, que as variáveis de ambiente mudam:
 
@@ -48,7 +48,7 @@ O padrão é `127.0.0.1`, e não `localhost`, porque as portas do Compose só es
 | `GET /clientes` | — | `200 [{cliente_id, nome}]`, em ordem de nome |
 | `POST /campanhas` | `{cliente_id, nome, descricao?, tags?}` | `201 {campanha_id}` |
 | `POST /links` | `{url, cliente_id, canal?, expira_em?, campanha_id?}` | `201 {short_code}` |
-| `GET /r/{short_code}` | — | `302` com `Location` igual à `url` gravada |
+| `GET /r/{short_code}` | — | `302` com `Location` igual à `url` gravada, com o domínio em IDNA se tiver acento |
 | `GET /metricas` | — | `200 {falhas_gravacao_clique}` |
 
 Exemplo:
@@ -74,10 +74,10 @@ Sete caracteres em Base62, cada um sorteado com o módulo `secrets` do Python, s
 
 ### O caminho de um clique
 
-1. A aplicação lê `link:{short_code}` na réplica do Redis. Se o link não está lá, por ainda não ter sido copiado, ou se a réplica não responde, lê do master. A conexão com a réplica não faz novas tentativas: na primeira falha, a leitura vai ao master (Q-31).
+1. A aplicação lê `link:{short_code}` na réplica do Redis. Se o link não está lá, por ainda não ter sido copiado, ou se a réplica não responde, lê do master. As conexões com o Redis não fazem novas tentativas: na réplica, a leitura que falha vai direto ao master (Q-31); no master, um `INCR` repetido depois de uma resposta perdida somaria o mesmo clique duas vezes. Valem os tempos limite padrão do `redis-py`, de 5 s para conectar e 5 s para cada resposta.
 2. Sem o link no master, responde `404`. Com `expira_em` já passado, responde `410` com uma página HTML de link expirado. Nos dois casos, nada é contado nem gravado (RN-03).
-3. Caso contrário, responde `302`. Só depois que a resposta sai, a aplicação envia o clique ao Cassandra, sem esperar a confirmação, e executa `INCR contador:{short_code}` no master.
-4. A gravação do clique tem tempo limite de 2 s (Q-41). Se ela falhar ou passar desse tempo, o clique é descartado, sem nova tentativa: a falha vai para o log, com o `short_code` e o erro, e soma 1 em `falhas_gravacao_clique`, em `GET /metricas` (RN-07). O contador do Redis soma mesmo assim.
+3. Caso contrário, responde `302`. Um domínio com acento vai no `Location` convertido para IDNA, como `https://café.example/oferta` em `https://xn--caf-dma.example/oferta`, e o resto da URL segue como foi gravado. Só depois que a resposta sai, a aplicação envia o clique ao Cassandra, sem esperar a confirmação, e executa `INCR contador:{short_code}` no master.
+4. A gravação do clique tem tempo limite de 2 s (Q-41). Se ela falhar ou passar desse tempo, o clique é descartado, sem nova tentativa: a falha vai para o log, com o `short_code` e o erro, e soma 1 em `falhas_gravacao_clique`, em `GET /metricas` (RN-07). O contador do Redis soma mesmo assim. Se o `INCR` falhar, a falha vai para o log e a resposta já enviada não muda.
 
 O dispositivo sai do cabeçalho `User-Agent` (Q-37): `tablet` para iPad, tablets Android (Android sem `Mobile`) e User-Agent com `Tablet`; `mobile` para iPhone, celulares Android e demais User-Agent com `Mobi`; `desktop` para Windows, macOS, Linux e ChromeOS. Fica `outro` o User-Agent ausente, o de robôs e pré-visualizações de redes sociais (`bot`, `crawl`, `spider`, `facebookexternalhit`, `WhatsApp` e outros), o de `curl` e `wget` e o que não se encaixa em nenhuma regra.
 
@@ -111,6 +111,6 @@ Os testes usam o banco 15 do Redis, o banco `linkpulse_testes` do MongoDB e o ke
 | [test_campanhas.py](tests/test_campanhas.py) | Os campos do documento da campanha, com `links` vazia; sem `cliente_id` ou `nome`, `422` |
 | [test_links.py](tests/test_links.py) | CA-2: os campos do Hash do link e o Set do cliente. CA-3 e Q-40: pedidos rejeitados com `422`, sem nada gravado no Redis nem na campanha. CA-5: a colisão preserva o link existente e o novo link recebe outro código. CA-6: o código entra na lista `links` da campanha. RN-08: com a réplica, que recusa escritas, e com o Redis fora do ar, a resposta é `503` sem `short_code` e a campanha não muda |
 | [test_short_code.py](tests/test_short_code.py) | CA-4: 10.000 códigos com 7 caracteres em Base62, sem dois seguidos que difiram só no último caractere |
-| [test_redirecionamento.py](tests/test_redirecionamento.py) | CA-7: link sem `expira_em` responde `302` com a `url` gravada, com o relógio em 2100. CA-8: link expirado responde `410`, sem contador e sem linha no Cassandra. CA-9: código inexistente responde `404`. CA-10: link fora da réplica, num banco aonde a cópia não chega, e réplica fora do ar respondem `302`, lidos do master. CA-12: o clique vira uma linha com `short_code`, `clicado_em`, `clique_id`, dispositivo e referrer, e nenhum arquivo da aplicação tem `UPDATE`. CA-13: 50 acessos concorrentes somam exatamente 50 no contador e gravam 50 linhas. RN-07: com o Cassandra simulado fora do ar, a resposta continua `302`, a falha vai para o log e `GET /metricas` mostra 1. A classificação do dispositivo para 11 User-Agent |
+| [test_redirecionamento.py](tests/test_redirecionamento.py) | CA-7: link sem `expira_em` responde `302` com a `url` gravada, com o relógio em 2100. CA-8: link expirado responde `410`, sem contador e sem linha no Cassandra. CA-9: código inexistente responde `404`. CA-10: link fora da réplica, num banco aonde a cópia não chega, e réplica fora do ar respondem `302`, lidos do master. CA-12: o clique vira uma linha com `short_code`, `clicado_em`, `clique_id`, dispositivo e referrer, e nenhum arquivo da aplicação tem `UPDATE`. CA-13: 50 acessos concorrentes somam exatamente 50 no contador e gravam 50 linhas, e um `INCR` cuja resposta se perde soma uma vez só. Um domínio com acento sai em IDNA no `Location`. RN-07: com o Cassandra simulado fora do ar, a resposta continua `302`, a falha vai para o log e `GET /metricas` mostra 1. A classificação do dispositivo para 11 User-Agent |
 
 O teste da réplica fora do ar não é o CA-11: ele usa uma porta sem servidor, e não a réplica do Compose derrubada. O CA-11 e o CA-14, com a réplica e o Cassandra de fato parados, entram nos testes de aceitação (RM-40).

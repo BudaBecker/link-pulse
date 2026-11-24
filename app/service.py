@@ -1,3 +1,4 @@
+import logging
 import secrets
 import string
 import uuid
@@ -10,6 +11,8 @@ from pymongo.collection import Collection
 
 from app.cliques import RegistroDeCliques
 from app.models import NovaCampanha, NovoCliente, NovoLink
+
+log = logging.getLogger(__name__)
 
 ALFABETO_SHORT_CODE = string.ascii_uppercase + string.ascii_lowercase + string.digits
 TAMANHO_SHORT_CODE = 7
@@ -151,4 +154,9 @@ def contar_clique(
 ) -> None:
     # Primeiro o evento, que não espera o Cassandra: uma falha no INCR não impede o registro.
     cliques.registrar(short_code, user_agent, referrer)
-    master.incr(f"contador:{short_code}")
+    try:
+        master.incr(f"contador:{short_code}")
+
+    # A resposta já saiu; o contador é soft state (RN-05).
+    except redis.RedisError as erro:
+        log.warning("contador não somado em %s: %r", short_code, erro)

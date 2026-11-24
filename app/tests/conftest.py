@@ -2,13 +2,12 @@ import os
 from pathlib import Path
 
 import pytest
-import redis
 from cassandra.cluster import Cluster
 from fastapi.testclient import TestClient
 from pymongo import MongoClient
 
 from app.cliques import RegistroDeCliques
-from app.main import TEMPO_LIMITE_CLIQUE, criar_app
+from app.main import TEMPO_LIMITE_CLIQUE, abrir_redis, criar_app
 
 # Banco 15 do Redis e bancos próprios no MongoDB e no Cassandra, para não apagar os dados da demonstração.
 BANCO_REDIS = 15
@@ -17,18 +16,9 @@ KEYSPACE_CASSANDRA = "linkpulse_testes"
 ESQUEMA_CASSANDRA = Path(__file__).parents[2] / "infra" / "cassandra" / "esquema.cql"
 
 
-def conectar_redis(variavel_porta: str, porta_padrao: str) -> redis.Redis:
-    return redis.Redis(
-        host=os.environ.get("REDIS_MASTER_HOST", "127.0.0.1"),
-        port=int(os.environ.get(variavel_porta, porta_padrao)),
-        db=BANCO_REDIS,
-        decode_responses=True,
-    )
-
-
 @pytest.fixture
 def master():
-    conexao = conectar_redis("REDIS_MASTER_PORT", "6379")
+    conexao = abrir_redis("REDIS_MASTER_HOST", "REDIS_MASTER_PORT", "6379", db=BANCO_REDIS)
     conexao.flushdb()
     yield conexao
     conexao.flushdb()
@@ -37,7 +27,7 @@ def master():
 
 @pytest.fixture
 def replica():
-    conexao = conectar_redis("REDIS_REPLICA_PORT", "6380")
+    conexao = abrir_redis("REDIS_MASTER_HOST", "REDIS_REPLICA_PORT", "6380", db=BANCO_REDIS)
     yield conexao
     conexao.close()
 

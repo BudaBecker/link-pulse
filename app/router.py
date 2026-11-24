@@ -1,3 +1,5 @@
+from urllib.parse import urlsplit, urlunsplit
+
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
@@ -68,7 +70,19 @@ def redirecionar(short_code: str, request: Request, tarefas: BackgroundTasks):
         request.headers.get("user-agent"),
         request.headers.get("referer"),
     )
-    return RedirectResponse(url, status_code=302)
+    return RedirectResponse(host_em_idna(url), status_code=302)
+
+
+def host_em_idna(url: str) -> str:
+    # O RedirectResponse codificaria "café" como "caf%C3%A9", e o cliente leria esse texto como host.
+    partes = urlsplit(url)
+    if partes.hostname.isascii():
+        return url
+
+    usuario, arroba, endereco = partes.netloc.rpartition("@")
+    host, dois_pontos, porta = endereco.partition(":")
+    netloc = usuario + arroba + host.encode("idna").decode("ascii") + dois_pontos + porta
+    return urlunsplit(partes._replace(netloc=netloc))
 
 
 @router.get("/metricas")

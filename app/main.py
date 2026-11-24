@@ -31,6 +31,18 @@ async def ciclo_de_vida(app: FastAPI):
         cluster.shutdown()
 
 
+def abrir_redis(variavel_host: str, variavel_porta: str, porta_padrao: str, db: int = 0) -> redis.Redis:
+    # Sem novas tentativas: um INCR repetido depois de uma resposta perdida somaria duas vezes,
+    # e a leitura que falha na réplica vai direto ao master (Q-31).
+    return redis.Redis(
+        host=os.environ.get(variavel_host, "127.0.0.1"),
+        port=int(os.environ.get(variavel_porta, porta_padrao)),
+        db=db,
+        decode_responses=True,
+        retry=Retry(NoBackoff(), 0),
+    )
+
+
 def criar_app(
     master: redis.Redis | None = None,
     campanhas: Collection | None = None,
@@ -38,20 +50,10 @@ def criar_app(
     cliques: RegistroDeCliques | None = None,
 ) -> FastAPI:
     if master is None:
-        master = redis.Redis(
-            host=os.environ.get("REDIS_MASTER_HOST", "127.0.0.1"),
-            port=int(os.environ.get("REDIS_MASTER_PORT", "6379")),
-            decode_responses=True,
-        )
+        master = abrir_redis("REDIS_MASTER_HOST", "REDIS_MASTER_PORT", "6379")
 
     if replica is None:
-        # Sem novas tentativas: se a réplica não responde, a leitura vai direto ao master (Q-31).
-        replica = redis.Redis(
-            host=os.environ.get("REDIS_REPLICA_HOST", "127.0.0.1"),
-            port=int(os.environ.get("REDIS_REPLICA_PORT", "6380")),
-            decode_responses=True,
-            retry=Retry(NoBackoff(), 0),
-        )
+        replica = abrir_redis("REDIS_REPLICA_HOST", "REDIS_REPLICA_PORT", "6380")
 
     if campanhas is None:
         mongo = MongoClient(os.environ.get("MONGO_URL", "mongodb://127.0.0.1:27017"))
