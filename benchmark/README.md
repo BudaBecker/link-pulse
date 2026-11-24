@@ -197,18 +197,19 @@ Dispositivos, nos dois lados e lidos linha a linha: 6.000.000 `mobile` (60%), 3.
 
 ## Gerador de carga
 
-O gerador mede as quatro operações do produto nos dois lados, em laço fechado: um número fixo de conexões, e cada uma só envia a próxima operação quando a anterior responde ([ADR-0014](../docs/decisoes/ADR-0014-modelo-de-dados-e-metodo-do-benchmark.md#como-a-carga-é-aplicada)). O gerador já mede leitura de link, incremento do contador, gravação de clique e consulta ao histórico, e a [calibração](#calibração) escolheu o número de conexões. Os cenários de pico e de queda do Cassandra e a tela de resultados são as próximas entregas do [plano de testes](../docs/specs/SPEC-005-testes-de-stress.md#plano-de-implementação).
+O gerador mede as quatro operações do produto nos dois lados, em laço fechado: um número fixo de conexões, e cada uma só envia a próxima operação quando a anterior responde ([ADR-0014](../docs/decisoes/ADR-0014-modelo-de-dados-e-metodo-do-benchmark.md#como-a-carga-é-aplicada)). O gerador mede a leitura do link, o incremento do contador, a gravação de clique, a consulta ao histórico e o [pico de tráfego](#pico-de-tráfego), as etapas 1 a 5 da sequência de testes. A [calibração](#calibração) escolheu o número de conexões. O cenário de queda do Cassandra e a tela de resultados são as próximas entregas do [plano de testes](../docs/specs/SPEC-005-testes-de-stress.md#plano-de-implementação).
 
 | Ação | Comando |
 | --- | --- |
-| Restaurar a base e medir as quatro operações nos dois lados | `python benchmark/medir.py` |
+| Restaurar a base e medir as etapas 1 a 5 nos dois lados: as quatro operações e o pico | `python benchmark/medir.py` |
+| Restaurar a base e medir só o pico de tráfego | `python benchmark/medir.py --operacoes pico` |
 | Medir só algumas operações ou um lado, com outras durações | `python benchmark/medir.py --operacoes contador registro --lados postgres --duracao 20 --aquecimento 5` |
 | Medir sobre o estado atual, sem restaurar em momento nenhum, nem antes do histórico | `python benchmark/medir.py --sem-restaurar` |
-| Calibrar: medir tudo com 8, 32 e 64 conexões e escolher o número | `python benchmark/calibrar.py` |
+| Calibrar: medir as quatro operações com 8, 32 e 64 conexões e escolher o número | `python benchmark/calibrar.py` |
 
 `--conexoes` vale 8 por padrão, o número escolhido pela calibração. Se uma nova calibração escolher outro número, passe-o em toda medição, como em `python benchmark/medir.py --conexoes 32`. `--duracao` (60 s) e `--aquecimento` (10 s) seguem a execução completa. `--processos` muda o número de processos do gerador, que por padrão é um por conexão.
 
-O [medir.py](medir.py) roda no computador, como o `base.py`, e pega a mesma trava: nenhum comando da base roda no meio de uma medição. Por padrão, ele restaura a base antes de começar e de novo antes do histórico por período, se uma escrita rodou antes dele ([SPEC-005](../docs/specs/SPEC-005-testes-de-stress.md#sequência-de-testes)). As operações seguem a ordem da sequência de testes, um lado de cada vez. Cada execução é um contêiner `gerador` (8 CPUs, 3 GB), que roda o [gerador.py](gerador.py). Na janela medida, o `medir.py` lê também a CPU do banco que a operação exercita. O resultado vai para `benchmark/registros/`, fora do Git, e o resumo sai em tabela no fim. O [calibrar.py](calibrar.py) repete a mesma sequência, com as mesmas restaurações, para cada número de conexões.
+O [medir.py](medir.py) roda no computador, como o `base.py`, e pega a mesma trava: nenhum comando da base roda no meio de uma medição. Por padrão, ele restaura a base antes de começar e de novo antes do histórico por período e antes do pico, se uma escrita rodou desde a última restauração ([SPEC-005](../docs/specs/SPEC-005-testes-de-stress.md#sequência-de-testes)). As etapas seguem a ordem da sequência de testes, um lado de cada vez. Cada execução é um contêiner `gerador` (8 CPUs, 3 GB), que roda o [gerador.py](gerador.py). Na janela medida, o `medir.py` lê também a CPU de cada banco que a etapa exercita, com os bancos lidos em paralelo. O resultado vai para `benchmark/registros/`, fora do Git, e o resumo sai em tabela no fim. O [calibrar.py](calibrar.py) repete as quatro operações isoladas, com as mesmas restaurações, para cada número de conexões; o pico não entra na calibração.
 
 ### O que cada operação executa
 
@@ -218,6 +219,7 @@ O [medir.py](medir.py) roda no computador, como o `base.py`, e pega a mesma trav
 | Contador | `INCR contador:{short_code}` no Redis master | `UPDATE contadores SET total = total + 1` pela chave |
 | Registro de clique | `INSERT` em `cliques_por_link` no Cassandra | `INSERT` em `cliques` |
 | Histórico por período | `SELECT` em `cliques_por_link` na janela do manifesto, `LIMIT 1000` | o mesmo em `cliques`, `ORDER BY clicado_em DESC, clique_id DESC LIMIT 1000` |
+| Pico de tráfego | redirecionamento, contador e registro em sequência, no link popular | os mesmos três comandos, na mesma ordem, no link popular |
 
 - **Link de cada chamada:** 20% caem no link popular do manifesto, e o resto se divide por igual entre os outros 44.999 links, com um sorteio de semente fixa por conexão.
 - **Clique gravado:** instante atual, `clique_id` `timeuuid` do mesmo instante, `pais` vazio, dispositivo e referrer na mesma proporção da base. Os instantes ficam depois da janela do histórico.
@@ -231,9 +233,10 @@ O [medir.py](medir.py) roda no computador, como o `base.py`, e pega a mesma trav
 | --- | --- |
 | Vazão | operações concluídas sem erro nos segundos medidos, divididas pela duração |
 | p50, p95 e p99 | percentis por posição (nearest-rank) das latências sem erro, em ms |
-| Taxa de erro | erros divididos pelo total de operações medidas. Exceção do driver, link sem dados no redirecionamento e contador ausente contam como erro |
+| Sucessos e erros | operações medidas que terminaram sem erro e com erro. No pico, contados por operação |
+| Taxa de erro | erros divididos pelo total de operações medidas. Exceção do driver, link sem dados no redirecionamento e contador ausente contam como erro. Sem nenhuma tentativa na janela, a taxa é indefinida (`null`, mostrada como `—`) |
 | CPU do gerador | `usage_usec` do cgroup do contêiner, de `cpu.stat`, na janela medida, dividido pelo tempo: dá os núcleos usados. Dividido também pelas CPUs do limite (`cpu.max`), dá o percentual da cota, registrado arredondado em `cpu_gerador_pct` e sem arredondamento em `cpu_gerador_pct_exato` |
-| CPU do banco | o mesmo cálculo no contêiner do banco exercitado (Redis master, Cassandra ou PostgreSQL), lido pelo `medir.py` com `docker exec` no início e no fim da janela, que o gerador marca na saída |
+| CPU do banco | o mesmo cálculo em cada contêiner de banco exercitado (Redis master, Cassandra ou PostgreSQL; no pico do lado NoSQL, o Redis master e o Cassandra), lido pelo `medir.py` com `docker exec` no início e no fim da janela, que o gerador marca na saída. Fica em `cpu_bancos`, por banco |
 | Memória do gerador | pico do cgroup do contêiner (`memory.peak`), da partida ao fim da execução |
 
 As operações que começam no aquecimento são descartadas, e só entram as que começam dentro da janela medida.
@@ -263,7 +266,7 @@ Passo 3 do [plano de testes](../docs/specs/SPEC-005-testes-de-stress.md#plano-de
 
 **Resultado: 8 conexões, com o gerador em Python.** Com 8 conexões, o maior uso foi 50,3% da cota (4,02 núcleos), no registro de clique no Cassandra. Com 32, o registro de clique no Cassandra chegou a 80,6%. Com 64, o redirecionamento no Redis chegou a 75,3% e o registro de clique no Cassandra, a 91,7%. Como nenhuma combinação passou de 70% com 8 conexões, a reescrita em Rust não foi necessária. O mesmo número vale para os dois lados e para as quatro operações.
 
-**Alcance do CA-3.** Com 8 conexões, as quatro operações isoladas rodaram um lado de cada vez, com os mesmos tetos, e o uso de CPU do gerador ficou registrado e abaixo de 70% da cota em todas: o CA-3 da [SPEC-005](../docs/specs/SPEC-005-testes-de-stress.md#critérios-de-aceitação) foi conferido nelas. Falta conferi-lo no pico de tráfego (etapa 5), na tarefa do cenário de pico (RM-43).
+**Alcance do CA-3.** Com 8 conexões, as quatro operações isoladas rodaram um lado de cada vez, com os mesmos tetos, e o uso de CPU do gerador ficou registrado e abaixo de 70% da cota em todas: o CA-3 da [SPEC-005](../docs/specs/SPEC-005-testes-de-stress.md#critérios-de-aceitação) foi conferido nelas. No pico de tráfego (etapa 5), ele foi conferido na [execução do pico](#pico-de-tráfego).
 
 **Configuração adotada.** O gerador tem 8 CPUs e 3 GB, com um processo por conexão. Os bancos comparados continuam com 2 CPUs e 2 GB cada. Com 4 CPUs e 4 processos de 2 threads, a primeira versão chegou a 99,8% da cota no redirecionamento no Redis. Com 8 processos de 1 thread, a vazão subiu 32%, porque as threads do mesmo processo disputavam o interpretador do Python ([análise na issue #47](https://github.com/BudaBecker/link-pulse/issues/47)).
 
@@ -309,3 +312,46 @@ Medido em 24/11/2026, das 11h03 às 11h43 (horário de Brasília), no computador
 - **O registro de clique no Cassandra é o que mais pesa no gerador.** Com 8 conexões, o driver do Cassandra gastou cerca de 0,5 ms de CPU do gerador por gravação, contra 0,08 ms por leitura no Redis. Com 32 conexões, o gerador usou 6,44 núcleos para 9,7 mil ops/s, e o Cassandra continuou em 2 núcleos.
 - **As escritas do PostgreSQL mudam com mais conexões.** O registro de clique foi de 3,4 mil para 10,3 mil ops/s com 32 conexões, e o contador caiu de 2,5 mil para 1,2 mil ops/s, com p95 de 164 ms. Nos dois casos o banco ficou abaixo do teto de CPU (79% e 21%), e os dados de CPU não identificam a espera. As hipóteses, não medidas, são um mesmo `fsync` gravar as confirmações de várias transações no registro e as conexões esperarem pelo bloqueio da linha do link popular, que recebe 20% das chamadas, no contador. Nenhum dos dois efeitos entra na comparação, que usa 8 conexões.
 - **Medição de desenvolvimento.** Estes números são do computador de desenvolvimento, com outros programas abertos. A calibração precisa ser repetida na máquina da apresentação, com `python benchmark/calibrar.py`, antes das execuções completas.
+
+### Pico de tráfego
+
+Passo 4 do [plano de testes](../docs/specs/SPEC-005-testes-de-stress.md#plano-de-implementação) (RM-43). Leitura do link, incremento do contador e registro de clique rodam ao mesmo tempo, todos no link popular, um lado de cada vez. Cada conexão repete as três operações em sequência, na ordem de um clique no produto, e a latência é medida por operação (Q-39 em [QUESTOES](../docs/requisitos/QUESTOES.md#respondidas)). A mistura fica em 1:1:1 nos dois lados, e cada conexão tem no máximo uma operação pendente. No lado NoSQL, cada conexão abre uma conexão com o Redis master e outra com o Cassandra; no PostgreSQL, uma só. Como as três operações de uma conexão se alternam, a vazão é praticamente a mesma nas três: ela mede quantos cliques completos por segundo o lado aguenta. A latência de cada operação mostra onde está a demora.
+
+**Estado dos dados.** Na sequência de testes, o pico roda depois do histórico por período, que só lê, e por isso parte do estado restaurado antes do histórico. Nesse caso, o `medir.py` não restaura de novo antes do pico. Numa seleção sem o histórico, como `--operacoes registro pico`, ele restaura antes do pico, porque o registro acrescentou cliques em cada lado na vazão do próprio lado. Medido sozinho, com `python benchmark/medir.py --operacoes pico`, o pico restaura a cópia antes de começar e parte do mesmo estado. Cada lado escreve só nos próprios bancos, então a ordem dos lados não muda o estado que o outro encontra.
+
+**Comando reproduzível.** `python benchmark/medir.py` mede as etapas 1 a 5 nos dois lados, com 8 conexões, 10 s de aquecimento e 60 s medidos por lado, restaurando a base antes do redirecionamento e antes do histórico. Em outra máquina, passe o número da calibração dela, como em `python benchmark/medir.py --conexoes 32`. O registro fica em `benchmark/registros/`, e o pico aparece com `operacao: "pico"` e as métricas de cada operação em `por_operacao`.
+
+#### Medições
+
+Medido em 24/11/2026, das 14h44 às 14h58 (horário de Brasília), no computador de desenvolvimento, com `python benchmark/medir.py`: as etapas 1 a 5, com 8 conexões em 8 processos, 10 s de aquecimento e 60 s medidos por lado. A base foi restaurada antes do redirecionamento e antes do histórico, com o CA-1 conferido nas duas vezes. O pico rodou depois do histórico, sem nova restauração. Os tetos conferidos com `docker inspect` foram 2 CPUs e 2 GiB no Redis master, no Cassandra e no PostgreSQL, e o gerador ficou com 8 CPUs.
+
+| Lado | Operação | Vazão (ops/s) | p50 (ms) | p95 (ms) | p99 (ms) | Sucessos | Erros | Taxa de erro |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| NoSQL | Redirecionamento (Redis) | 6.216 | 0,209 | 0,382 | 0,534 | 372.929 | 0 | 0% |
+| NoSQL | Contador (Redis) | 6.215 | 0,191 | 0,338 | 0,454 | 372.927 | 0 | 0% |
+| NoSQL | Registro de clique (Cassandra) | 6.216 | 0,742 | 1,017 | 1,311 | 372.929 | 0 | 0% |
+| PostgreSQL | Redirecionamento | 322 | 0,198 | 0,293 | 0,416 | 19.331 | 0 | 0% |
+| PostgreSQL | Contador | 322 | 15,291 | 52,634 | 81,938 | 19.331 | 0 | 0% |
+| PostgreSQL | Registro de clique | 322 | 3,958 | 4,563 | 6,207 | 19.331 | 0 | 0% |
+
+CPU na mesma janela de 60 s, em núcleos e em percentual da cota de cada contêiner:
+
+| Lado | Início (UTC) | Gerador (cota de 8) | Redis master (teto de 2) | Cassandra (teto de 2) | PostgreSQL (teto de 2) | Pico de memória do gerador (MiB) |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| NoSQL | 17:56:26 | 5,00 (62,5%) | 0,58 (29,1%) | 1,92 (96,1%) | — | 389 |
+| PostgreSQL | 17:57:41 | 0,13 (1,7%) | — | — | 0,20 (9,9%) | 352 |
+
+A comparação com os 70% usa o percentual sem arredondamento: 62,497% no lado NoSQL e 1,679% no PostgreSQL. Na mesma execução, as quatro operações isoladas também ficaram abaixo de 70%, com o máximo de 52,2% no redirecionamento no Redis, e nenhuma das dez execuções teve erro.
+
+#### Critérios conferidos
+
+- **CA-5:** no lado NoSQL, as três operações executaram e nenhuma teve erro: 372.929 leituras, 372.927 incrementos e 372.929 registros, com 0 erros em cada uma.
+- **CA-3 no pico:** os lados rodaram um depois do outro, cada um no seu contêiner `gerador` (o NoSQL a partir das 17:56:26 e o PostgreSQL a partir das 17:57:41, em UTC), com as mesmas 8 conexões e os mesmos tetos de 2 CPUs e 2 GiB nos bancos. A CPU do gerador ficou registrada e abaixo de 70% da cota nos dois lados: 62,5% e 1,7%.
+
+#### Leitura
+
+- **O lado NoSQL completou 19 vezes mais cliques por segundo** que o PostgreSQL: 6.216 contra 322. No PostgreSQL, o contador tem p50 de 15 ms e p99 de 82 ms. As 8 conexões atualizam a mesma linha de `contadores`, e cada `UPDATE` espera o bloqueio da linha, que só é solto quando a transação anterior confirma. Com o banco a 9,9% do teto de CPU, as conexões passam quase todo o tempo esperando. O bloqueio é a explicação provável, ainda não medida; a gravação em disco a cada confirmação (`fsync`) pode somar.
+- **No lado NoSQL, o Cassandra limita o ciclo.** Ele ficou a 96% do teto, e o registro de clique responde em 0,74 ms, contra cerca de 0,2 ms em cada operação do Redis. O Redis ficou a 29% do teto.
+- **O gerador ficou mais perto do teto no pico** do que nas operações isoladas: 62,5% da cota, por causa do driver do Cassandra, que é o que mais pesa no gerador (ver [Calibração](#calibração)). Na máquina da apresentação, confira essa margem depois de calibrar.
+- **O redirecionamento continua rápido nos dois lados.** No PostgreSQL, a leitura do link não espera o bloqueio do contador: o p95 ficou em 0,29 ms.
+- **Medição de desenvolvimento.** Os números são de uma execução no computador de desenvolvimento, com outros programas abertos. A comparação para a apresentação depende das 3 repetições na máquina dedicada (CA-4).
