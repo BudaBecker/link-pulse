@@ -1,5 +1,4 @@
--- Esquema do PostgreSQL, só para o benchmark (ADR-0014).
--- Sem chave estrangeira e sem índice além das chaves primárias.
+-- Sem chave estrangeira nem índices além das chaves primárias (ADR-0014).
 
 CREATE TABLE links (
   short_code  text PRIMARY KEY,

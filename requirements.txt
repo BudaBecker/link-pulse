@@ -1,4 +1,3 @@
-# Versões fixadas (ADR-0013). Python 3.13.18, ver Dockerfile.
 fastapi==0.165.0
 uvicorn==0.54.0
 redis==8.2.0

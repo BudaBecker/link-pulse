@@ -1,8 +1,4 @@
-"""Confere o ambiente local do Marco 2 (ADR-0013, ADR-0014).
-
-Roda dentro do Compose: docker compose run --rm verificar
-Sai com código 1 se alguma conferência falhar.
-"""
+"""Confere a configuração dos bancos e os esquemas do ambiente local."""
 
 import os
 import sys

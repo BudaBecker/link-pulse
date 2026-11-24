@@ -1,12 +1,9 @@
-# Ambiente local do Marco 2 (ADR-0013, ADR-0014, SPEC-004 passo 1).
-# Subir: docker compose up -d --wait
-# Detalhes, tetos e consumo medido: infra/README.md
+# Ambiente de desenvolvimento. Comandos e limites em infra/README.md.
 
 name: linkpulse
 
 x-teto-banco-comparado: &teto-banco-comparado
-  # Mesmo teto nos três bancos comparados (Redis master, Cassandra, PostgreSQL).
-  # Se o Cassandra não couber, o teto sobe nos três juntos (ADR-0013).
+  # Ajuste os limites dos três bancos juntos para manter a comparação.
   cpus: "2"
   mem_limit: 2g
   memswap_limit: 2g  # igual ao mem_limit: sem swap além do teto
@@ -14,7 +11,6 @@ x-teto-banco-comparado: &teto-banco-comparado
 services:
   redis-master:
     image: redis:8.2.11-bookworm
-    # Configuração padrão da imagem: sem AOF, só RDB (ADR-0013).
     <<: *teto-banco-comparado
     ports:
       - "127.0.0.1:6379:6379"
@@ -47,7 +43,6 @@ services:
 
   cassandra:
     image: cassandra:5.0.9
-    # Configuração padrão da imagem (commit log periódico); só o heap é limitado.
     <<: *teto-banco-comparado
     environment:
       MAX_HEAP_SIZE: 1G
@@ -58,9 +53,7 @@ services:
     volumes:
       - cassandra-dados:/var/lib/cassandra
     healthcheck:
-      # Sondagem leve: a porta CQL só abre ao fim da partida. Um cqlsh a cada 10 s
-      # gastaria cerca de 0,35 s de CPU da cota do banco; a conferência por CQL
-      # é feita uma vez, pelo cassandra-esquema.
+      # A sondagem TCP evita consumir a cota do Cassandra com consultas periódicas.
       test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/9042"]
       interval: 10s
       timeout: 10s
@@ -68,8 +61,7 @@ services:
       start_period: 60s
 
   cassandra-esquema:
-    # Cria o keyspace e cliques_por_link (idempotente) e fica em espera, para que
-    # `up --wait` não trate a saída do contêiner como falha.
+    # Após aplicar o esquema, o serviço permanece ativo para o Compose concluir o --wait.
     image: cassandra:5.0.9
     entrypoint:
       - sh
@@ -97,7 +89,6 @@ services:
 
   postgres:
     image: postgres:18.7-bookworm
-    # Todos os parâmetros no padrão (ADR-0013). O esquema é criado na primeira subida.
     <<: *teto-banco-comparado
     environment:
       POSTGRES_USER: linkpulse
@@ -109,8 +100,7 @@ services:
       - postgres-dados:/var/lib/postgresql
       - ./infra/postgres:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      # Por TCP, como a aplicação: na primeira subida, o servidor temporário que
-      # cria o esquema só aceita conexões pelo socket local.
+      # Pela rede: o servidor temporário da inicialização não aceita TCP.
       test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "linkpulse", "-d", "linkpulse"]
       interval: 5s
       timeout: 3s
@@ -118,7 +108,6 @@ services:
 
   mongo:
     image: mongo:8.0.38-noble
-    # Campanhas; fora do benchmark (ADR-0012).
     cpus: "1"
     mem_limit: 1g
     memswap_limit: 1g
@@ -133,7 +122,6 @@ services:
       retries: 20
 
   verificar:
-    # Confere o ambiente com as bibliotecas fixadas: docker compose run --rm verificar
     build: .
     profiles: ["verificacao"]
     command: ["python", "infra/verificar_ambiente.py"]

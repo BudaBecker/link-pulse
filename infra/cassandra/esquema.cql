@@ -1,9 +1,7 @@
--- Esquema do Cassandra (ARQUITETURA Passo 5, ADR-0014).
--- Um nó local: fator de replicação 1. Em produção, 3 (ADR-0013).
-
 CREATE KEYSPACE IF NOT EXISTS linkpulse
   WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
 
+-- clique_id distingue cliques do mesmo link no mesmo milissegundo.
 CREATE TABLE IF NOT EXISTS linkpulse.cliques_por_link (
   short_code   text,
   clicado_em   timestamp,
