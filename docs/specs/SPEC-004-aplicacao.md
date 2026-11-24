@@ -59,7 +59,11 @@ Os dados e as chaves estão em [ARQUITETURA](../arquitetura/ARQUITETURA.md) Pass
 
 ### Consultas e painel
 
-- As três consultas de analytics: cliques por dia de um link, cliques por canal entre os links de um cliente e total de cliques em uma janela de tempo.
+- As três consultas de analytics recebem `inicio` e `fim` na query string, em ISO 8601 com fuso, e contam os cliques do intervalo fechado `[inicio, fim]` (Q-45):
+  - `GET /analytics/por-dia?short_code=…` responde `{short_code, dias: [{dia, cliques}]}`, com um item para cada dia que o intervalo toca, em `AAAA-MM-DD` e em ordem crescente, e `0` nos dias sem clique (Q-46). Os dias são os do horário de Brasília (`America/Sao_Paulo`), e os instantes continuam gravados em UTC (Q-47).
+  - `GET /analytics/por-canal?cliente_id=…` lê os links do Set `links:cliente:{cliente_id}` e o `canal` de cada um, e responde `{cliente_id, canais: [{short_code, canal, cliques}]}`, com todos os links do cliente, inclusive os sem clique, e `canal` nulo no link sem canal, em ordem decrescente de cliques e, no empate, de `short_code` (Q-46).
+  - `GET /analytics/total?short_code=…` responde `{short_code, cliques}` (Q-46).
+- O pedido sem `short_code`, `cliente_id`, `inicio` ou `fim`, com data sem fuso ou com `inicio` depois de `fim` é rejeitado com `422`. Um `short_code` que não existe no Redis responde `404`; um cliente sem links, `200` com `canais` vazia (Q-48).
 - Cada consulta ao Cassandra informa a partition key e não usa `ALLOW FILTERING`.
 - A tela da aplicação é uma página HTML servida pela própria aplicação. Ela permite escolher ou cadastrar um cliente, criar links, e ver o total de cliques, os cliques por dia e por dispositivo de um link e a comparação entre os canais do cliente. Quando o link pertence a uma campanha, a tela mostra a descrição e as tags.
 
@@ -90,6 +94,6 @@ Stack em [ADR-0013](../decisoes/ADR-0013-stack-e-ambiente-do-marco-2.md).
 - [x] **CA-12** (RF-03, RN-06) — Dado um redirecionamento válido, quando o processamento assíncrono termina, então existe uma linha em `cliques_por_link` com aquele `short_code`, `clicado_em` e `clique_id`; nenhuma operação da aplicação executa `UPDATE` nessa tabela.
 - [x] **CA-13** (RF-04, RNF-07) — Dados N acessos concorrentes a um link válido, quando todos terminam, então `contador:{short_code}` aumentou exatamente N.
 - [ ] **CA-14** (RNF-02, RN-07) — Dado o Cassandra indisponível, quando recebo `GET /r/{short_code}` válido, então a resposta continua `302`, a latência p95 medida no servidor fica abaixo de 50 ms e o contador de falhas aumenta.
-- [ ] **CA-15** (RF-05) — Dado um conjunto conhecido de eventos, quando executo as três consultas de analytics, então cada uma retorna exatamente as contagens esperadas.
-- [ ] **CA-16** (RNF-06, RNF-05) — A tabela declara `short_code` como partition key e `CLUSTERING ORDER BY (clicado_em DESC, clique_id DESC)`; nenhuma consulta CQL usa `ALLOW FILTERING`; o ambiente declara um master e uma réplica no Redis e um fator de replicação no keyspace.
+- [x] **CA-15** (RF-05) — Dado um conjunto conhecido de eventos, quando executo as três consultas de analytics, então cada uma retorna exatamente as contagens esperadas.
+- [x] **CA-16** (RNF-06, RNF-05) — A tabela declara `short_code` como partition key e `CLUSTERING ORDER BY (clicado_em DESC, clique_id DESC)`; nenhuma consulta CQL usa `ALLOW FILTERING`; o ambiente declara um master e uma réplica no Redis e um fator de replicação no keyspace.
 - [ ] **CA-17** (RF-06, RNF-03) — Dado um link com cliques, quando abro o painel, então vejo os agregados por dia e por dispositivo e a comparação entre os canais do cliente, coerentes com o CA-15; um clique novo aparece em até 60 s.

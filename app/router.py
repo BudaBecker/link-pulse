@@ -1,10 +1,11 @@
+from typing import Annotated
 from urllib.parse import urlsplit
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from app import service
-from app.models import URL_HTTP, NovaCampanha, NovoCliente, NovoLink
+from app import analytics, service
+from app.models import URL_HTTP, JanelaDoCliente, JanelaDoLink, NovaCampanha, NovoCliente, NovoLink
 
 router = APIRouter()
 
@@ -84,3 +85,29 @@ def host_em_idna(url: str) -> str:
 @router.get("/metricas")
 def metricas(request: Request) -> dict:
     return {"falhas_gravacao_clique": request.app.state.cliques.falhas}
+
+
+@router.get("/analytics/por-dia")
+def cliques_por_dia(janela: Annotated[JanelaDoLink, Query()], request: Request) -> dict:
+    estado = request.app.state
+    try:
+        return analytics.cliques_por_dia(estado.master, estado.consultas, janela.short_code, janela.inicio, janela.fim)
+
+    except analytics.LinkInexistente as erro:
+        raise HTTPException(404, str(erro)) from erro
+
+
+@router.get("/analytics/por-canal")
+def cliques_por_canal(janela: Annotated[JanelaDoCliente, Query()], request: Request) -> dict:
+    estado = request.app.state
+    return analytics.cliques_por_canal(estado.master, estado.consultas, janela.cliente_id, janela.inicio, janela.fim)
+
+
+@router.get("/analytics/total")
+def total_de_cliques(janela: Annotated[JanelaDoLink, Query()], request: Request) -> dict:
+    estado = request.app.state
+    try:
+        return analytics.total_de_cliques(estado.master, estado.consultas, janela.short_code, janela.inicio, janela.fim)
+
+    except analytics.LinkInexistente as erro:
+        raise HTTPException(404, str(erro)) from erro

@@ -1,15 +1,16 @@
 # Aplicação do LinkPulse
 
-API em Python com FastAPI que cadastra clientes e campanhas, cria links curtos, redireciona e registra cada clique ([SPEC-004](../docs/specs/SPEC-004-aplicacao.md)), na stack do [ADR-0013](../docs/decisoes/ADR-0013-stack-e-ambiente-do-marco-2.md). Esta pasta tem os passos 2 e 3 do plano da spec: o cadastro de cliente, campanha e criação de link (RM-36) e o redirecionamento, o contador e a gravação assíncrona do clique (RM-37). As consultas de analytics e a tela entram nas tarefas seguintes (RM-38 e RM-39).
+API em Python com FastAPI que cadastra clientes e campanhas, cria links curtos, redireciona, registra cada clique e consulta o histórico de cliques ([SPEC-004](../docs/specs/SPEC-004-aplicacao.md)), na stack do [ADR-0013](../docs/decisoes/ADR-0013-stack-e-ambiente-do-marco-2.md). Esta pasta tem os passos 2 a 4 do plano da spec: o cadastro de cliente, campanha e criação de link (RM-36), o redirecionamento, o contador e a gravação assíncrona do clique (RM-37) e as consultas de analytics (RM-38). A tela entra na tarefa seguinte (RM-39).
 
 | Arquivo | O que tem |
 | --- | --- |
 | [main.py](main.py) | Monta a aplicação: abre as conexões e registra as rotas |
-| [router.py](router.py) | As rotas, que chamam o service e devolvem 201, 302, 404, 410, 422 ou 503 |
+| [router.py](router.py) | As rotas, que chamam o service ou o analytics e devolvem 200, 201, 302, 404, 410, 422 ou 503 |
 | [service.py](service.py) | O cadastro de clientes e campanhas, a criação de links, o sorteio do `short_code` e a leitura do link no redirecionamento |
 | [cliques.py](cliques.py) | A gravação assíncrona do clique no Cassandra, o contador de falhas e a classificação do dispositivo |
-| [models.py](models.py) | Os formatos dos pedidos, com a validação da URL e do `expira_em` |
-| [tests/](tests/) | Os testes dos critérios CA-1 a CA-10, CA-12 e CA-13 e das respostas de erro |
+| [analytics.py](analytics.py) | As três consultas de analytics: a leitura das partições no Cassandra e o agrupamento por dia e por canal |
+| [models.py](models.py) | Os formatos dos pedidos, com a validação da URL, do `expira_em` e da janela das consultas |
+| [tests/](tests/) | Os testes dos critérios CA-1 a CA-10, CA-12, CA-13, CA-15 e CA-16 e das respostas de erro |
 
 ## Como rodar
 
@@ -50,6 +51,9 @@ O padrão é `127.0.0.1`, e não `localhost`, porque as portas do Compose só es
 | `POST /links` | `{url, cliente_id, canal?, expira_em?, campanha_id?}` | `201 {short_code}` |
 | `GET /r/{short_code}` | — | `302` com `Location` igual à `url` gravada, com o domínio em IDNA se tiver acento |
 | `GET /metricas` | — | `200 {falhas_gravacao_clique}` |
+| `GET /analytics/por-dia?short_code&inicio&fim` | — | `200 {short_code, dias: [{dia, cliques}]}` |
+| `GET /analytics/por-canal?cliente_id&inicio&fim` | — | `200 {cliente_id, canais: [{short_code, canal, cliques}]}` |
+| `GET /analytics/total?short_code&inicio&fim` | — | `200 {short_code, cliques}` |
 
 Exemplo:
 
@@ -57,6 +61,7 @@ Exemplo:
 curl -X POST http://127.0.0.1:8000/links -H "content-type: application/json" \
   -d '{"url": "https://exemplo.com.br/natal", "cliente_id": "c1", "canal": "instagram"}'
 curl -i http://127.0.0.1:8000/r/{short_code}
+curl "http://127.0.0.1:8000/analytics/por-dia?short_code={short_code}&inicio=2026-11-18T00:00:00-03:00&fim=2026-11-24T23:59:59.999-03:00"
 ```
 
 ### Onde cada dado fica
@@ -81,9 +86,19 @@ Sete caracteres em Base62, cada um sorteado com o módulo `secrets` do Python, s
 
 O dispositivo sai do cabeçalho `User-Agent` (Q-37): `tablet` para iPad, tablets Android (Android sem `Mobile`) e User-Agent com `Tablet`; `mobile` para iPhone, celulares Android e demais User-Agent com `Mobi`; `desktop` para Windows, macOS, Linux e ChromeOS. Fica `outro` o User-Agent ausente, o de robôs e pré-visualizações de redes sociais (`bot`, `crawl`, `spider`, `facebookexternalhit`, `WhatsApp` e outros), o de `curl` e `wget` e o que não se encaixa em nenhuma regra.
 
+### As consultas de analytics
+
+As três consultas contam os cliques de `cliques_por_link` no intervalo fechado `[inicio, fim]`, os dois em ISO 8601 com fuso, como o `expira_em` (Q-45). Na query string, o `+` de um fuso como `+00:00` vira espaço; use `Z`, `-03:00` ou `%2B00:00`. O Cassandra guarda milissegundos, então um limite com microssegundos vai para o milissegundo seguinte, no início, ou para o anterior, no fim: `12:00:00.000500Z` a `12:00:00.001Z` não inclui um clique de `12:00:00.000Z`.
+
+- **Por dia:** lê os instantes dos cliques do link e conta por dia do horário de Brasília (`America/Sao_Paulo`), com um item para cada dia que o intervalo toca e `0` nos dias sem clique (Q-46, Q-47). Um clique às 22:30 de 20/11 em Brasília, gravado como 21/11 01:30 UTC, conta em 20/11.
+- **Por canal:** lê no master do Redis os links do Set `links:cliente:{cliente_id}` e o `canal` de cada um, e conta os cliques de cada link no Cassandra, uma consulta por partição, todas em paralelo. Os links vêm em ordem decrescente de cliques e, no empate, de `short_code`; o link sem canal vem com `canal` nulo (Q-46).
+- **Total:** um `SELECT COUNT(*)` na partição do link.
+
+Cada consulta CQL informa `short_code`, a partition key, e lê um trecho contínuo da partição, sem `ALLOW FILTERING` (RNF-06). As consultas por link conferem antes, no master do Redis, que o link existe. O master, e não a réplica, porque um link recém-criado pode ainda não ter chegado a ela; as consultas de analytics são poucas e não disputam com o redirecionamento.
+
 ### Erros
 
-Respostas decididas no Q-40 e no RN-03 ([QUESTOES](../docs/requisitos/QUESTOES.md#respondidas)):
+Respostas decididas no Q-40, no Q-48 e no RN-03 ([QUESTOES](../docs/requisitos/QUESTOES.md#respondidas)):
 
 | Situação | Resposta | O que é gravado |
 | --- | --- | --- |
@@ -92,6 +107,9 @@ Respostas decididas no Q-40 e no RN-03 ([QUESTOES](../docs/requisitos/QUESTOES.m
 | Em `POST /links`, falha de gravação no Redis ou 5 colisões seguidas | `503`, sem `short_code` | Nada no MongoDB |
 | Em `GET /r/{short_code}`, link que não existe | `404` | Nada |
 | Em `GET /r/{short_code}`, link com `expira_em` no passado | `410`, com a página de link expirado | Nada |
+| Nas consultas, `short_code`, `cliente_id`, `inicio` ou `fim` ausente ou vazio, data sem fuso ou fora de ISO 8601, ou `inicio` depois de `fim` (Q-48) | `422` | — |
+| Em `por-dia` e `total`, link que não existe | `404` | — |
+| Em `por-canal`, cliente sem links | `200` com `canais` vazia | — |
 
 A aplicação não confere se o `cliente_id` foi cadastrado, nem se a campanha é do mesmo cliente do link ([SPEC-004](../docs/specs/SPEC-004-aplicacao.md#fora-de-escopo)).
 
@@ -103,7 +121,7 @@ Com os bancos de desenvolvimento no ar e o ambiente Python criado:
 .venv/Scripts/python -m pytest app
 ```
 
-Os testes usam o banco 15 do Redis, o banco `linkpulse_testes` do MongoDB e o keyspace `linkpulse_testes` do Cassandra. O Redis e o MongoDB esvaziam antes e depois de cada teste. O keyspace é criado na primeira execução, com o mesmo [esquema](../infra/cassandra/esquema.cql) da aplicação, e cada teste apaga no fim os cliques dos links que criou. Os clientes, links e cliques da demonstração, no banco 0, no banco `linkpulse` e no keyspace `linkpulse`, não mudam. Rode os testes com os volumes de desenvolvimento, e não com os do benchmark. A suíte leva cerca de 6 s.
+Os testes usam o banco 15 do Redis, o banco `linkpulse_testes` do MongoDB e o keyspace `linkpulse_testes` do Cassandra. O Redis e o MongoDB esvaziam antes e depois de cada teste. O keyspace é criado na primeira execução, com o mesmo [esquema](../infra/cassandra/esquema.cql) da aplicação, e cada teste apaga no fim os cliques dos links que criou. Os clientes, links e cliques da demonstração, no banco 0, no banco `linkpulse` e no keyspace `linkpulse`, não mudam. O teste da modelagem só lê o esquema do keyspace `linkpulse` e o papel de cada Redis. Rode os testes com os volumes de desenvolvimento, e não com os do benchmark. A suíte leva cerca de 12 s.
 
 | Arquivo | O que confere |
 | --- | --- |
@@ -112,5 +130,7 @@ Os testes usam o banco 15 do Redis, o banco `linkpulse_testes` do MongoDB e o ke
 | [test_links.py](tests/test_links.py) | CA-2: os campos do Hash do link e o Set do cliente. CA-3 e Q-40: pedidos rejeitados com `422`, sem nada gravado no Redis nem na campanha. CA-5: a colisão preserva o link existente e o novo link recebe outro código. CA-6: o código entra na lista `links` da campanha. RN-08: com a réplica, que recusa escritas, e com o Redis fora do ar, a resposta é `503` sem `short_code` e a campanha não muda |
 | [test_short_code.py](tests/test_short_code.py) | CA-4: 10.000 códigos com 7 caracteres em Base62, sem dois seguidos que difiram só no último caractere |
 | [test_redirecionamento.py](tests/test_redirecionamento.py) | CA-7: link sem `expira_em` responde `302` com a `url` gravada, com o relógio em 2100. CA-8: link expirado responde `410`, sem contador e sem linha no Cassandra. CA-9: código inexistente responde `404`. CA-10: link fora da réplica, num banco aonde a cópia não chega, e réplica fora do ar respondem `302`, lidos do master. CA-12: o clique vira uma linha com `short_code`, `clicado_em`, `clique_id`, dispositivo e referrer, e nenhum arquivo da aplicação tem `UPDATE`. CA-13: 50 acessos concorrentes somam exatamente 50 no contador e gravam 50 linhas, e um `INCR` cuja resposta se perde soma uma vez só. Um domínio com acento sai em IDNA no `Location`. RN-07: com o Cassandra simulado fora do ar, a resposta continua `302`, a falha vai para o log e `GET /metricas` mostra 1. A classificação do dispositivo para 11 User-Agent |
+| [test_analytics.py](tests/test_analytics.py) | CA-15: com cliques gravados em instantes conhecidos, dentro e fora da janela de 20/11 a 22/11/2026 em Brasília, as três consultas dão as contagens esperadas: o clique no próprio início e no próprio fim conta, o de 1 ms antes ou depois não; um clique às 22:30 em Brasília conta no dia de Brasília, e não no de UTC; dois cliques no mesmo milissegundo contam dois; um limite com microssegundos não inclui um clique fora do intervalo, nas três consultas; dias sem clique vêm com `0`; o canal compara só os links do cliente, com empate por `short_code` e o link sem canal com `canal` nulo. Os cliques de três redirecionamentos aparecem nas três consultas. Os comandos CQL executados informam `short_code` e não usam `ALLOW FILTERING`. Q-48: pedidos inválidos com `422`, link inexistente com `404`, link sem cliques com zeros e cliente sem links com lista vazia |
+| [test_modelagem.py](tests/test_modelagem.py) | CA-16: no keyspace `linkpulse`, `short_code` é a única partition key, a ordem é `clicado_em DESC, clique_id DESC` e há fator de replicação; nenhum comando CQL da aplicação usa `ALLOW FILTERING`, e os que leem informam `short_code`; o Redis tem um master com réplica conectada e uma réplica |
 
 O teste da réplica fora do ar não é o CA-11: ele usa uma porta sem servidor, e não a réplica do Compose derrubada. O CA-11 e o CA-14, com a réplica e o Cassandra de fato parados, entram nos testes de aceitação (RM-40).

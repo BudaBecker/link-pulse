@@ -6,6 +6,7 @@ from cassandra.cluster import Cluster
 from fastapi.testclient import TestClient
 from pymongo import MongoClient
 
+from app.analytics import ConsultasDeCliques
 from app.cliques import RegistroDeCliques
 from app.main import TEMPO_LIMITE_CLIQUE, abrir_redis, criar_app
 
@@ -67,8 +68,13 @@ def cliques(sessao_cassandra, master):
 
 
 @pytest.fixture
-def api(master, campanhas, replica, cliques):
-    return TestClient(criar_app(master, campanhas, replica, cliques))
+def consultas(sessao_cassandra):
+    return ConsultasDeCliques(sessao_cassandra)
+
+
+@pytest.fixture
+def api(master, campanhas, replica, cliques, consultas):
+    return TestClient(criar_app(master, campanhas, replica, cliques, consultas))
 
 
 @pytest.fixture
