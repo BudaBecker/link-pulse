@@ -28,8 +28,8 @@ Prazo: **29/09/2026 às 00:00** (vencimento no AVA) — na prática, o envio pre
 | EN-09 | Wide-Column: definição de Column Families e, no Cassandra, partition key e clustering columns | [ARQUITETURA](../arquitetura/ARQUITETURA.md) Passo 5 §A tabela | Atendido |
 | EN-10 | Combinação de famílias explícita na justificativa | [ARQUITETURA](../arquitetura/ARQUITETURA.md) Resumo e Passo 3 | Atendido |
 | EN-11 | Um único PDF nomeado `Marco1_NomeDoGrupo_Campus.pdf` (aqui: `Marco1_LinkPulse_AsaNorte.pdf`) | VISAO, ARQUITETURA e FUNCIONALIDADES, nessa ordem, com capa (arquivo gerado, fora do repositório) | Gerado; falta o nome dos integrantes na capa |
-| EN-12 | Upload no AVA, atividade "Marco 1 — Projeto Incremental" | — | Pendente (feito por um integrante) |
-| EN-13 | Apresentação de 3 a 5 minutos em sala, no dia da entrega | — | Pendente |
+| EN-12 | Upload no AVA, atividade "Marco 1 — Projeto Incremental" | — | Atendido |
+| EN-13 | Apresentação de 3 a 5 minutos em sala, no dia da entrega | — | Atendido |
 
 ## Marco 2 — o que será exigido
 

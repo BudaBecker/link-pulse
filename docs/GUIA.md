@@ -47,7 +47,7 @@ O andamento de cada tarefa fica na issue indicada no [ROADMAP](roadmap/ROADMAP.m
 
 ### O problema
 
-Cada clique dispara duas operações ao mesmo tempo, com necessidades opostas ([ARQUITETURA](arquitetura/ARQUITETURA.md), Resumo e Passo 1): o redirecionamento é uma leitura simples que não pode ser lenta nem falhar, e o registro do clique é uma escrita em rajada, lida depois em consultas que varrem muitos eventos. Num único banco relacional, as agregações do painel disputariam o disco com as escritas dos cliques, e aguentar picos exigiria uma máquina cada vez maior (Passo 2). Essa afirmação nunca tinha sido medida, e é ela que o benchmark do Marco 2 põe à prova.
+Um clique exige dois tipos de trabalho, com necessidades diferentes ([ARQUITETURA](arquitetura/ARQUITETURA.md), Resumo e Passo 1): o redirecionamento é uma leitura simples que não pode ser lenta nem falhar, e o registro do clique é uma escrita em rajada, lida depois em consultas que varrem muitos eventos. Num único banco relacional, as agregações do painel disputariam o disco com as escritas dos cliques, e aguentar picos exigiria uma máquina cada vez maior (Passo 2). Essa afirmação nunca tinha sido medida, e é ela que o benchmark do Marco 2 põe à prova.
 
 ### Papel de cada banco
 
@@ -77,7 +77,7 @@ O desenho está em [ARQUITETURA](arquitetura/ARQUITETURA.md) Passo 3, e o compor
 ### Pré-requisitos
 
 - **Docker com o Compose.** Os tetos de memória dos bancos somam 7,5 GB; o ambiente foi medido numa máquina virtual do Docker com 7,6 GiB. No Windows, a memória do Docker se ajusta em `.wslconfig` ([infra/README.md](../infra/README.md#consumo-de-memória-medido)).
-- **Python 3.11 ou mais novo no computador**, só para `benchmark/base.py`, que usa apenas a biblioteca padrão. As bibliotecas de acesso aos bancos rodam dentro dos contêineres, nas versões de [requirements.txt](../requirements.txt).
+- **Python 3.11 ou mais novo no computador**, para preparar a base com `benchmark/base.py` e medir as operações com `benchmark/medir.py`. Ambos usam a biblioteca padrão. As bibliotecas de acesso aos bancos rodam dentro dos contêineres, nas versões de [requirements.txt](../requirements.txt).
 - **Disco.** A base do benchmark ocupa cerca de 2,8 GB, e a cópia guardada para restaurá-la ocupa outro tanto. Ao fazer uma cópia nova, a anterior só é apagada quando a nova fica pronta.
 - **Senha do PostgreSQL**, opcional: a variável `POSTGRES_PASSWORD` (padrão `linkpulse`).
 
@@ -89,8 +89,8 @@ O desenho está em [ARQUITETURA](arquitetura/ARQUITETURA.md) Passo 3, e o compor
 
 Os mesmos bancos rodam com volumes próprios do benchmark, separados dos de desenvolvimento. O roteiro de uso:
 
-1. **Carregar uma vez:** `python benchmark/base.py carregar`. Recria os volumes do benchmark vazios, carrega 10 milhões de cliques no Redis com o Cassandra e no PostgreSQL, confere tudo e guarda uma cópia dos volumes. Leva cerca de 10 minutos ([tempos por etapa](../benchmark/README.md#carga)).
-2. **Restaurar antes de cada repetição do benchmark:** `python benchmark/base.py restaurar`. Os bancos voltam à cópia em 25 a 60 s, e a conferência leva cerca de 45 s a mais (`--sem-conferir` a pula). A [SPEC-005](specs/SPEC-005-testes-de-stress.md#sequência-de-testes) diz quando restaurar.
+1. **Carregar uma vez:** `python benchmark/base.py carregar`. Recria os volumes do benchmark vazios, grava o histórico de 10 milhões de cliques no Cassandra e no PostgreSQL e os links e contadores correspondentes no Redis e no PostgreSQL, confere tudo e guarda uma cópia dos volumes. Leva cerca de 10 minutos ([tempos por etapa](../benchmark/README.md#carga)).
+2. **Medir as quatro operações:** `python benchmark/medir.py`. O comando restaura a cópia, mede um lado por vez e salva os resultados em `benchmark/registros/`. Para apenas repor e conferir a base, use `python benchmark/base.py restaurar`. Veja as [opções de medição](../benchmark/README.md#gerador-de-carga).
 3. **Conferir a qualquer momento:** `python benchmark/base.py conferir`.
 4. **Voltar ao desenvolvimento:** `docker compose up -d --wait`. Os volumes do benchmark continuam guardados. Para voltar a eles, pare os bancos com `docker compose stop` e rode `restaurar`.
 
@@ -114,7 +114,7 @@ Só um comando da base roda por vez. Cada `carregar`, `copiar` e `restaurar` gra
 - **Ambiente:** `docker compose run --rm verificar` confere o Redis (réplica ligada e gravação em disco no padrão), o keyspace e as chaves de `cliques_por_link` no Cassandra, as tabelas, os índices e a confirmação de escrita do PostgreSQL, e se o MongoDB responde. Sai com código 1 se algo falhar. A lista completa está em [infra/README.md](../infra/README.md#como-usar).
 - **Base do benchmark** (CA-1 da [SPEC-005](specs/SPEC-005-testes-de-stress.md#critérios-de-aceitação)): `python benchmark/base.py conferir` consulta os próprios bancos e confere, link a link, que os dois lados têm os mesmos links e cliques, que o link popular tem 20% dos cliques e que os contadores batem com os cliques, em cerca de 45 s. Com `--completo`, lê os 10 milhões de cliques dos dois lados e confere a distribuição de dispositivos e a assinatura dos cliques, em cerca de 3 minutos. Termina com `CA-1 conferido.` ou com a lista do que falhou ([benchmark/README.md](../benchmark/README.md#conferência-ca-1)).
 - **Aplicação:** ainda sem testes. O passo 6 do plano da [SPEC-004](specs/SPEC-004-aplicacao.md#plano-de-implementação) prevê testes de aceitação para cada critério, inclusive com a réplica do Redis e o Cassandra fora do ar.
-- **Benchmark:** `python benchmark/medir.py` mede as quatro operações nos dois lados (CA-2 da SPEC-005, [benchmark/README.md](../benchmark/README.md#gerador-de-carga)). Os critérios 3 a 8 serão verificados nas tarefas da calibração, dos cenários, da tela de testes e das execuções completas (RM-31 a RM-33).
+- **Benchmark:** `python benchmark/medir.py` mede as quatro operações nos dois lados (CA-2 da SPEC-005, [benchmark/README.md](../benchmark/README.md#gerador-de-carga)). Ainda falta verificar a calibração, o pico de tráfego, a queda do Cassandra e a apresentação dos resultados ao vivo e gravados.
 
 ## Como a aplicação funciona
 
@@ -128,20 +128,20 @@ A aplicação ainda não foi implementada. O que segue é o comportamento previs
 
 ## Como analisar os resultados do benchmark
 
-O gerador de carga já mede as quatro operações, mas a calibração, os cenários, a tela de testes e as execuções completas ainda não foram implementados (RM-31 a RM-33). Os números em [benchmark/README.md](../benchmark/README.md#gerador-de-carga) são de uma execução de desenvolvimento, sem calibração, e não valem para a apresentação.
+O gerador de carga já mede as quatro operações, mas a calibração, os cenários, a tela de testes e as execuções completas ainda não foram implementados (RM-31 a RM-33). Os números em [benchmark/README.md](../benchmark/README.md#gerador-de-carga) vêm de medições de desenvolvimento, sem calibração, e não valem para a apresentação.
 
 ### O que é comparado
 
 Quatro operações do produto, cada uma no banco NoSQL escolhido para ela e numa versão equivalente no PostgreSQL ([ADR-0012](decisoes/ADR-0012-marco-2-benchmark-sql-x-nosql.md#decisão)): redirecionamento (leitura do link), contador (incremento), registro de clique (uma inserção por clique) e histórico por período (cliques de um link nas últimas 24 horas da base, até 1.000 linhas). Além delas, dois cenários: o pico de tráfego, com as três operações do clique ao mesmo tempo no link popular, e a queda do Cassandra durante 30 s.
 
-A sequência de seis etapas está na [SPEC-005](specs/SPEC-005-testes-de-stress.md#sequência-de-testes). A **execução ao vivo** roda uma vez em até 480 s e só ilustra. Os números que valem são os da **execução completa**: 60 s por lado em cada etapa, depois de 10 s de aquecimento descartados, com a sequência repetida 3 vezes e a mediana publicada.
+A sequência de seis etapas está na [SPEC-005](specs/SPEC-005-testes-de-stress.md#sequência-de-testes). A **execução ao vivo** roda uma vez em até 480 s e só ilustra. Os números que valem são os da **execução completa**: nas cinco primeiras etapas, cada lado roda por 60 s após 10 s de aquecimento. A sequência inteira é repetida três vezes. Publica-se a mediana das cinco primeiras etapas e o resultado de cada uma das três quedas do Cassandra.
 
 ### Como ler as métricas
 
-- **Vazão:** operações concluídas por segundo. Como cada conexão só envia a próxima operação quando a anterior responde, é a vazão máxima do banco com aquele número de conexões.
+- **Vazão:** operações concluídas com sucesso por segundo. Cada conexão espera a resposta antes de enviar o próximo pedido. Se o gerador demora para enviá-lo, o banco pode ficar à espera. Por isso, leia a vazão junto com o uso de CPU do gerador.
 - **Latência p50, p95 e p99:** o tempo abaixo do qual ficam 50%, 95% e 99% das operações. O p50 é o caso típico; o p95 e o p99 mostram as pausas e filas que a mediana esconde.
 - **Taxa de erro:** a fração das operações que falharam.
-- **CPU do gerador:** se o gerador passa de 70% do seu limite, ele pode ser o gargalo, e a medição não vale.
+- **CPU do gerador:** o percentual indica quanto do limite de CPU do próprio gerador foi usado. Para a comparação oficial, ele precisa ficar abaixo de 70% em cada etapa. A partir desse valor, o gerador pode estar limitando a carga que chega ao banco.
 - **Na queda do Cassandra:** os cliques que falharam ao gravar e a diferença entre o contador e o histórico, isto é, os cliques que o contador somou e o histórico não tem.
 
 ### Antes de comparar: a medição vale?
