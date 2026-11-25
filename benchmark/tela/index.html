@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LinkPulse · testes de stress</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/tela.css">
+</head>
+<body>
+  <header class="topo">
+    <div>
+      <h1>LinkPulse · testes de stress</h1>
+      <p class="secundario">Benchmark SQL x NoSQL: Redis e Cassandra contra o PostgreSQL, um lado de cada vez.</p>
+    </div>
+    <div class="controles">
+      <button type="button" id="iniciar" class="primario">Iniciar sequência ao vivo</button>
+      <div class="gravadas">
+        <label for="gravacoes" class="sr-only">Execução gravada</label>
+        <select id="gravacoes"><option value="">Nenhuma execução gravada</option></select>
+        <button type="button" id="abrir">Abrir execução gravada</button>
+      </div>
+    </div>
+  </header>
+
+  <section class="situacao" aria-live="polite">
+    <p id="modo" class="modo">Nenhuma execução aberta</p>
+    <p id="etapa-atual"></p>
+    <p id="relogio"></p>
+    <p id="base" class="secundario"></p>
+    <p id="aviso" class="aviso" hidden></p>
+    <div id="seletor-repeticao" class="repeticao" hidden>
+      <label for="repeticao">Curvas da repetição</label>
+      <select id="repeticao"></select>
+    </div>
+  </section>
+
+  <main id="etapas"></main>
+
+  <details class="log">
+    <summary>Saída da medição</summary>
+    <pre id="log"></pre>
+  </details>
+
+  <script src="/vendor/chart.js-4.6.1/chart.umd.min.js"></script>
+  <script src="/tela.js"></script>
+</body>
+</html>

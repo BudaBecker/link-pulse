@@ -37,9 +37,10 @@ Depois da carga, uma cópia dos volumes de dados do Redis, do Cassandra e do Pos
 | 5 | Pico de tráfego | leitura, contador e registro ao mesmo tempo, todos no link popular, um lado de cada vez | 120 s |
 | 6 | Queda do Cassandra | 200 redirecionamentos por segundo pela aplicação; o Cassandra para aos 30 s e volta aos 60 s | 90 s |
 
-- **Ao vivo:** a sequência roda uma vez, em até 480 s. Cada etapa divide o seu tempo por igual entre as execuções que contém.
-- **Execução completa:** nas etapas 1 a 5, cada lado roda 60 s depois de 10 s de aquecimento descartados; a curva extra entra nas etapas 2 e 3. A sequência inteira, incluindo a queda do Cassandra, repete 3 vezes (Q-36). Nas etapas 1 a 5, o resultado é a mediana; na queda, as 3 execuções são publicadas e todas precisam cumprir o CA-6.
-- **Estado dos dados:** a cópia é restaurada antes de cada repetição e antes do histórico por período, a única leitura afetada pelas linhas que o registro de clique acrescenta. A execução ao vivo parte da cópia restaurada e não restaura no meio, porque só ilustra.
+- **Ao vivo:** a sequência roda uma vez, em até 480 s, contados do clique no botão ao resultado da queda, com a subida de cada execução. Cada etapa divide o seu tempo por igual entre as execuções que contém. Nas etapas 1 a 4, cada execução tem 3 s de aquecimento descartados e 18 s medidos; no pico, 3 s e 45 s; a queda mantém 90 s e usa a folga das outras etapas para subir a API e conferir (Q-72).
+- **Execução completa:** nas etapas 1 a 5, cada lado roda 60 s depois de 10 s de aquecimento descartados; a curva extra entra nas etapas 2 e 3. A sequência inteira, incluindo a queda do Cassandra, repete 3 vezes (Q-36). Nas etapas 1 a 5, o resultado é a mediana; na queda, as 3 execuções são publicadas e todas precisam cumprir o CA-6. O resultado é gravado em `benchmark/gravacoes/`, no Git (Q-74).
+- **Curva extra:** cada conexão do gerador aplica `synchronous_commit=off` só na sua sessão; a configuração do servidor continua a padrão (Q-73).
+- **Estado dos dados:** a cópia é restaurada antes de cada repetição e antes do histórico por período, a única leitura afetada pelas linhas que o registro de clique acrescenta. A execução ao vivo parte da cópia restaurada e não restaura no meio, porque só ilustra. A restauração dela roda antes do botão, pelo terminal, fora dos 480 s (Q-72).
 - **Pico de tráfego:** cada conexão repete as três operações em sequência no link popular, leitura, contador e registro, como um clique no produto; a mistura fica em 1:1:1 nos dois lados, e a latência é medida por operação (Q-39). Na sequência, o pico parte do estado restaurado antes do histórico por período, que não escreve.
 - **Calibração:** antes da primeira execução completa, o gerador testa 8, 32 e 64 conexões e registra o número escolhido e o seu uso de CPU.
 
@@ -55,6 +56,10 @@ Para cada execução: vazão (operações por segundo), latência p50, p95 e p99
 - A curva extra aparece identificada como fora do padrão.
 - Outro botão abre a execução completa salva, identificada como gravada.
 - A tela funciona sem internet.
+- **Servidor:** a tela tem servidor próprio no benchmark, separado da aplicação, que roda a medição a pedido do botão e repassa os eventos dela à tela; a tela abre com os bancos parados (Q-70).
+- **Curvas:** uma amostra por segundo de vazão e p95, do gerador, e de CPU e memória dos bancos exercitados, com o aquecimento sombreado; no pico, a vazão conta cliques completos (Q-71).
+- **Gravação:** o placar mostra a mediana das repetições, e as curvas, uma repetição por vez (Q-74).
+- **Queda:** a tela mostra os `302` e os cliques que falharam por segundo, com a parada, o religamento e a volta da gravação marcados, e um placar da janela do CA-6 e da conferência (Q-75).
 
 ## Plano de implementação
 
@@ -74,5 +79,5 @@ Para cada execução: vazão (operações por segundo), latência p50, p95 e p99
 - [ ] **CA-4** (RF-10, RNF-08) — A execução completa repete a sequência inteira 3 vezes, restaura a cópia antes de cada repetição e antes do histórico por período, descarta os 10 s de aquecimento e publica a mediana das etapas 1 a 5; a curva extra aparece nas duas escritas, separada da execução padrão.
 - [x] **CA-5** (RNF-04) — No cenário de pico, a taxa de erro das três operações no lado NoSQL é zero.
 - [ ] **CA-6** (RNF-01, RNF-02, RN-07) — No cenário de queda, em cada uma das 3 execuções da execução completa e enquanto o Cassandra está parado, os redirecionamentos continuam respondendo `302` com p95 abaixo de 50 ms; o contador continua somando, e os cliques que falharam aparecem na tela.
-- [ ] **CA-7** (RF-11) — A tela inicia a sequência com um botão, mostra a etapa atual, as curvas sobrepostas e o placar, e conclui a execução ao vivo em até 480 s.
+- [x] **CA-7** (RF-11) — A tela inicia a sequência com um botão, mostra a etapa atual, as curvas sobrepostas e o placar, e conclui a execução ao vivo em até 480 s.
 - [ ] **CA-8** (RF-11) — Com a rede desligada, a tela carrega com os gráficos e abre a execução salva, identificada como gravada.
