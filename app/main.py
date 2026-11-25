@@ -16,6 +16,8 @@ from app.cliques import RegistroDeCliques
 from app.router import router
 
 TEMPO_LIMITE_CLIQUE = 2.0  # segundos (Q-41)
+# No Windows, uma conexão recusada só dá erro depois de cerca de 2 s (Q-61).
+TEMPO_CONEXAO_REPLICA = 0.25  # segundos
 PASTA_ESTATICA = Path(__file__).parent / "static"
 
 
@@ -38,7 +40,9 @@ async def ciclo_de_vida(app: FastAPI):
         cluster.shutdown()
 
 
-def abrir_redis(variavel_host: str, variavel_porta: str, porta_padrao: str, db: int = 0) -> redis.Redis:
+def abrir_redis(
+    variavel_host: str, variavel_porta: str, porta_padrao: str, db: int = 0, tempo_conexao: float = 5.0
+) -> redis.Redis:
     # Sem novas tentativas: um INCR repetido depois de uma resposta perdida somaria duas vezes,
     # e a leitura que falha na réplica vai direto ao master (Q-31).
     return redis.Redis(
@@ -47,7 +51,12 @@ def abrir_redis(variavel_host: str, variavel_porta: str, porta_padrao: str, db: 
         db=db,
         decode_responses=True,
         retry=Retry(NoBackoff(), 0),
+        socket_connect_timeout=tempo_conexao,
     )
+
+
+def abrir_replica(db: int = 0) -> redis.Redis:
+    return abrir_redis("REDIS_REPLICA_HOST", "REDIS_REPLICA_PORT", "6380", db=db, tempo_conexao=TEMPO_CONEXAO_REPLICA)
 
 
 def criar_app(
@@ -61,7 +70,7 @@ def criar_app(
         master = abrir_redis("REDIS_MASTER_HOST", "REDIS_MASTER_PORT", "6379")
 
     if replica is None:
-        replica = abrir_redis("REDIS_REPLICA_HOST", "REDIS_REPLICA_PORT", "6380")
+        replica = abrir_replica()
 
     if campanhas is None:
         mongo = MongoClient(os.environ.get("MONGO_URL", "mongodb://127.0.0.1:27017"))

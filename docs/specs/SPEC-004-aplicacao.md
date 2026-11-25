@@ -1,6 +1,6 @@
 # SPEC-004 — Aplicação do Marco 2
 
-- **Status:** Pronta
+- **Status:** Concluída
 - **Requisitos:** RF-01, RF-02, RF-03, RF-04, RF-05, RF-06, RF-07, RF-08, RF-09, RNF-01, RNF-02, RNF-03, RNF-05, RNF-06, RNF-07, RN-01, RN-02, RN-03, RN-04, RN-06, RN-07, RN-08
 - **Decisões:** ADR-0002, ADR-0003, ADR-0004, ADR-0006, ADR-0007, ADR-0009, ADR-0012, ADR-0013, ADR-0014
 - **Bloqueios:** nenhum
@@ -53,7 +53,7 @@ Os dados e as chaves estão em [ARQUITETURA](../arquitetura/ARQUITETURA.md) Pass
 `GET /r/{short_code}`:
 
 1. Lê `link:{short_code}` na réplica do Redis com `HGETALL`.
-2. Se o link não estiver na réplica, ou se a réplica não responder, lê do master.
+2. Se o link não estiver na réplica, ou se a réplica não responder, lê do master. A conexão com a réplica tem tempo limite de 0,25 s, para uma réplica parada não atrasar o redirecionamento (Q-61).
 3. Se o link não existe no master, responde `404`. Se `expira_em` está no passado, responde `410` com a página de expiração. Nos dois casos, não soma no contador nem grava evento.
 4. Caso contrário, responde `302` com `Location: {url}`.
 5. Depois da resposta, executa `INCR contador:{short_code}` no master e grava o evento em `cliques_por_link`, de forma assíncrona e com tempo limite de 2 s (Q-41).
@@ -97,10 +97,10 @@ Stack em [ADR-0013](../decisoes/ADR-0013-stack-e-ambiente-do-marco-2.md).
 - [x] **CA-8** (RN-03, RF-07) — Dado um link com `expira_em` no passado, quando recebo `GET /r/{short_code}`, então a resposta é `410`, o contador não muda e nenhum evento é gravado.
 - [x] **CA-9** (RN-03) — Dado um `short_code` inexistente, quando recebo `GET /r/{short_code}`, então a resposta é `404`.
 - [x] **CA-10** (RF-02) — Dado um link gravado no master e ainda ausente na réplica, quando recebo `GET /r/{short_code}`, então a resposta é `302`.
-- [ ] **CA-11** (RNF-01) — Dada a réplica do Redis derrubada, quando recebo `GET /r/{short_code}` válido, então a resposta é `302`.
+- [x] **CA-11** (RNF-01) — Dada a réplica do Redis derrubada, quando recebo `GET /r/{short_code}` válido, então a resposta é `302`.
 - [x] **CA-12** (RF-03, RN-06) — Dado um redirecionamento válido, quando o processamento assíncrono termina, então existe uma linha em `cliques_por_link` com aquele `short_code`, `clicado_em` e `clique_id`; nenhuma operação da aplicação executa `UPDATE` nessa tabela.
 - [x] **CA-13** (RF-04, RNF-07) — Dados N acessos concorrentes a um link válido, quando todos terminam, então `contador:{short_code}` aumentou exatamente N.
-- [ ] **CA-14** (RNF-02, RN-07) — Dado o Cassandra indisponível, quando recebo `GET /r/{short_code}` válido, então a resposta continua `302`, a latência p95 medida no servidor fica abaixo de 50 ms e o contador de falhas aumenta.
+- [x] **CA-14** (RNF-02, RN-07) — Dado o Cassandra indisponível, quando recebo `GET /r/{short_code}` válido, então a resposta continua `302`, a latência p95 medida no servidor fica abaixo de 50 ms e o contador de falhas aumenta.
 - [x] **CA-15** (RF-05) — Dado um conjunto conhecido de eventos, quando executo as consultas por dia, por canal e total, então cada uma retorna exatamente as contagens esperadas.
 - [x] **CA-16** (RNF-06, RNF-05) — A tabela declara `short_code` como partition key e `CLUSTERING ORDER BY (clicado_em DESC, clique_id DESC)`; nenhuma consulta CQL usa `ALLOW FILTERING`; o ambiente declara um master e uma réplica no Redis e um fator de replicação no keyspace.
 - [x] **CA-17** (RF-06, RNF-03) — Dado um link com cliques, quando abro o painel, então vejo o total, os agregados por dia e por dispositivo e a comparação entre os canais do cliente, coerentes com as consultas do CA-15 e com a consulta por dispositivo; um clique novo aparece em até 60 s.

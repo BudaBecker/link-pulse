@@ -6,7 +6,7 @@ Uma especificação (spec) descreve **uma entrega implementável**: o comportame
 | --- | --- |
 | [_modelo.md](_modelo.md) | Modelo em branco |
 | [SPEC-001-redirecionamento.md](SPEC-001-redirecionamento.md) | Redirecionamento de link curto (Substituída por SPEC-004) |
-| [SPEC-004-aplicacao.md](SPEC-004-aplicacao.md) | Aplicação do Marco 2: clientes, links, redirecionamento, cliques e painel (Pronta) |
+| [SPEC-004-aplicacao.md](SPEC-004-aplicacao.md) | Aplicação do Marco 2: clientes, links, redirecionamento, cliques e painel (Concluída) |
 | [SPEC-005-testes-de-stress.md](SPEC-005-testes-de-stress.md) | Benchmark SQL x NoSQL: gerador de carga, cenários e tela de testes (Pronta) |
 | SPEC-002, SPEC-003 | Descartadas antes de serem escritas: criação de link e analytics entraram na SPEC-004 |
 
