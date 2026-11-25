@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from app.main import PASTA_ESTATICA
-from app.tests.test_tela import janela_da_tela
+from app.main import PASTA_ESTATICA, TEMPO_LIMITE_CLIQUE
+from app.tests.test_tela import PRAZO_RNF_03, intervalo_de_atualizacao, janela_da_tela
 
 EXECUTOR = Path(__file__).with_name("dados_da_tela.mjs")
 CODIGO = "abc1234"
@@ -16,9 +16,13 @@ AGORA = "2026-11-24T18:00:00Z"
 
 
 def rodar(funcao: str, argumentos: list, respostas: dict) -> dict:
+    return executar({"funcao": funcao, "argumentos": argumentos, "respostas": respostas})
+
+
+def executar(pedido: dict) -> dict:
     node = shutil.which("node")
     assert node, "os testes da tela precisam do Node no PATH (Q-56)"
-    entrada = json.dumps({"funcao": funcao, "argumentos": argumentos, "respostas": respostas})
+    entrada = json.dumps(pedido)
     saida = subprocess.run(
         [node, str(EXECUTOR), str(PASTA_ESTATICA / "dados.js")],
         input=entrada,
@@ -130,3 +134,28 @@ def test_falha_nas_campanhas_mantem_os_links():
     saida = rodar("buscarContexto", [CLIENTE], {"/links": [[{"short_code": CODIGO}]]})
 
     assert saida["resultado"] == {"links": [{"short_code": CODIGO}], "campanhas": None, "falhou": True}
+
+
+def test_clique_chega_a_tela_publicada_em_ate_60_s_com_cliques_continuos():
+    # 500 cliques por minuto, cada leitura 130 ms depois da anterior e a gravação no tempo limite.
+    cada, marcado = 120, 10_000
+    saida = executar(
+        {
+            "simulacao": {
+                "codigo": CODIGO,
+                "clienteId": CLIENTE,
+                "inicio": "2026-11-24T15:00:00-03:00",
+                "cliqueACadaMs": cada,
+                "gravacaoMs": TEMPO_LIMITE_CLIQUE * 1000,
+                "defasagemMs": 130,
+                "cicloMs": intervalo_de_atualizacao() * 1000,
+                "duracaoMs": 90_000,
+            }
+        }
+    )
+
+    publicacoes = saida["publicacoes"]
+    cliques_ate_o_marcado = marcado // cada + 1
+    primeira = next(p for p in publicacoes if p["total"] >= cliques_ate_o_marcado)
+    assert primeira["em"] - marcado < PRAZO_RNF_03 * 1000
+    assert len(publicacoes) == 90_000 // (intervalo_de_atualizacao() * 1000)

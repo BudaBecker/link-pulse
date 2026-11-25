@@ -1,5 +1,8 @@
 const FUSO_BRASILIA = "America/Sao_Paulo";
 const TENTATIVAS_COERENTES = 3;
+// Maior que os 2 s de tempo limite da gravação (Q-41): até o fim da janela, todo clique já
+// foi gravado ou descartado, e as quatro consultas veem o mesmo conjunto (Q-57).
+const MARGEM_DA_JANELA_MS = 5000;
 const diaBrasilia = new Intl.DateTimeFormat("pt-BR", {
   timeZone: FUSO_BRASILIA, year: "numeric", month: "2-digit", day: "2-digit",
 });
@@ -13,7 +16,8 @@ function exibirDia(iso) {
 }
 
 function janelaDosSeteDias(agora = new Date()) {
-  const partes = Object.fromEntries(diaBrasilia.formatToParts(agora).map(({ type, value }) => [type, value]));
+  const fechamento = new Date(agora.getTime() - MARGEM_DA_JANELA_MS);
+  const partes = Object.fromEntries(diaBrasilia.formatToParts(fechamento).map(({ type, value }) => [type, value]));
   const hoje = `${partes.year}-${partes.month}-${partes.day}`;
   const seisDiasAtras = new Date(`${hoje}T12:00:00Z`);
   // A aritmética em UTC desloca a data civil sem depender do fuso do computador.
@@ -23,7 +27,7 @@ function janelaDosSeteDias(agora = new Date()) {
     .find(({ type }) => type === "timeZoneName").value.slice(3);
   return {
     inicio: `${primeiroDia}T00:00:00.000${deslocamento(primeiroDia)}`,
-    fim: `${hoje}T23:59:59.999${deslocamento(hoje)}`,
+    fim: fechamento.toISOString(),
     rotulo: `${exibirDia(primeiroDia)} a ${exibirDia(hoje)}`,
   };
 }
@@ -55,8 +59,8 @@ function historicoCoerente({ total, dias, dispositivos, canais }, codigo) {
   return somaDosCliques(dias) === total && somaDosCliques(dispositivos) === total && doLink?.cliques === total;
 }
 
-// As quatro consultas leem o Cassandra em momentos diferentes; um clique entre elas
-// deixaria o total diferente da soma das barras (Q-56). Sem coerência, devolve null.
+// Proteção para um relógio do navegador adiantado: um clique ainda sendo gravado entre as
+// consultas deixaria o total diferente da soma das barras (Q-56). Sem coerência, devolve null.
 async function buscarHistorico(requisitar, codigo, clienteId, sinal, agora = new Date()) {
   const periodo = janelaDosSeteDias(agora);
   const { inicio, fim } = periodo;
