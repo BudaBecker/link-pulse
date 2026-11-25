@@ -126,8 +126,12 @@ def criar_link(master: redis.Redis, campanhas: Collection, pedido: NovoLink) -> 
         except InvalidId:
             pass
         
-        if campanha_id is None or campanhas.count_documents({"_id": campanha_id}, limit=1) == 0:
+        campanha = None if campanha_id is None else campanhas.find_one({"_id": campanha_id}, {"cliente_id": 1})
+        if campanha is None:
             raise CampanhaInexistente("campanha_id não existe")
+
+        if campanha["cliente_id"] != pedido.cliente_id:
+            raise CampanhaInexistente("campanha_id é de outro cliente")
 
     campos = {
         "url": pedido.url,

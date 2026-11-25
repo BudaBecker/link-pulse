@@ -162,6 +162,18 @@ def test_campanha_inexistente_nao_grava_nada(api, master, campanha_id):
     assert master.dbsize() == 0
 
 
+def test_campanha_de_outro_cliente_nao_grava_nada(api, master, campanhas, criar_campanha):
+    campanha_id = criar_campanha(cliente_id="c2")
+    corpo = {"url": "https://exemplo.com.br", "cliente_id": "c1", "campanha_id": campanha_id}
+
+    resposta = api.post("/links", json=corpo)
+
+    assert resposta.status_code == 422
+    assert resposta.json() == {"detail": "campanha_id é de outro cliente"}
+    assert master.dbsize() == 0
+    assert campanhas.find_one({"_id": ObjectId(campanha_id)})["links"] == []
+
+
 @pytest.fixture(params=["replica", "redis-fora-do-ar"])
 def redis_que_falha(request):
     if request.param == "replica":
