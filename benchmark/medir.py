@@ -181,17 +181,18 @@ def executar_queda(args: argparse.Namespace) -> dict:
     return resultado
 
 
-def numero(valor, sinal: str = "") -> str:
+def numero(valor, sinal: str = "", falta: str = "indisponível") -> str:
     """Um campo da queda que pode faltar, quando a leitura não respondeu ou o Cassandra não voltou."""
-    return "indisponível" if valor is None else f"{sinal}{valor:,}"
+    return falta if valor is None else f"{sinal}{valor:,}"
 
 
 def resumo_da_queda(r: dict) -> None:
     q, c, m = r["queda"], r["conferencia"], r["marcos"]
-    print(f"  queda vista pela aplicação: de {q['janela_s'][0]:.0f} a {q['janela_s'][1]:.1f} s"
-          + ("" if q["gravacao_voltou_na_etapa"] else " (a gravação não voltou na etapa)"))
+    volta = {True: "", False: " (a gravação não voltou na etapa)",
+             None: " (volta da gravação indeterminada: o histórico não foi consultado)"}[q["gravacao_voltou_na_etapa"]]
+    print(f"  queda vista pela aplicação: de {q['janela_s'][0]:.0f} a {q['janela_s'][1]:.1f} s{volta}")
     print(f"  {q['respostas_302']:,} de {q['envios']:,} envios com 302 · p95 no servidor {q['p95_servidor_ms']} ms · "
-          f"p95 no gerador {q['p95_gerador_ms']} ms · contador {numero(q['contador_somou'], '+')} · "
+          f"p95 no gerador {q['p95_gerador_ms']} ms · contador {numero(q['contador_somou'], '+', 'indeterminado')} · "
           f"falhas {numero(q['falhas_somaram'], '+')}")
     print("  marcos (s): " + " · ".join(f"{k.removesuffix('_s')} {v}" for k, v in m.items()))
     print(f"  conferência: contador {numero(c['contador'], '+')} · histórico {numero(c['historico'], '+')} · "
@@ -199,8 +200,8 @@ def resumo_da_queda(r: dict) -> None:
           f"(diferença menos falhas: {numero(c['diferenca_menos_falhas'])})"
           + (f" · a consulta ao Cassandra falhou: {c['erro']}" if c["erro"] else ""))
     ca6 = "cumprido" if q["ca6"] else "NÃO cumprido"
-    if r["erros_no_controle"]:
-        ca6 = f"rodada inválida, o controle do Cassandra falhou ({'; '.join(r['erros_no_controle'])}); repita"
+    if r["rodada_invalida"]:
+        ca6 = f"rodada inválida: {'; '.join(r['rodada_invalida'])}; repita"
     print(f"  CA-6 nesta execução: {ca6} · CPU do gerador {r['cpu_gerador_nucleos']} núcleos "
           f"({r['cpu_gerador_pct']}%)")
 

@@ -277,6 +277,21 @@ def leitura_em(amostras: list[dict], t: float, campo: str) -> int | None:
     return valor
 
 
+def contador_na_janela(d: Disparo, amostras: list[dict], inicio: float, fim: float) -> tuple[int | None, list]:
+    """Aumento do contador entre a primeira e a última leitura válida dentro da janela (Q-69).
+
+    Com as duas leituras dentro da janela, o aumento não inclui incrementos de fora dela. Se os envios entre as
+    bordas e as leituras passam da margem, o aumento não distingue perda de leitura: fica indeterminado (None).
+    """
+    validas = [a for a in amostras if a["contador"] is not None and inicio <= a["t"] <= fim]
+    if not validas:
+        return None, [None, None]
+    primeira, ultima = validas[0], validas[-1]
+    sem_leitura = sum(1 for t in d.agendado if inicio <= t < primeira["t"] or ultima["t"] <= t < fim)
+    aumento = ultima["contador"] - primeira["contador"] if sem_leitura <= MARGEM_CONTADOR else None
+    return aumento, [primeira["t"], ultima["t"]]
+
+
 def transicoes_da_porta(sondagens: list[tuple[float, bool]]) -> tuple[float | None, float | None]:
     """Primeira sondagem com a porta CQL fechada depois dos 30 s e a primeira aberta depois dela."""
     fechada = next((t for t, aberta in sondagens if t >= PARADA and not aberta), None)
@@ -440,19 +455,26 @@ def main() -> int:
     # cada 0,25 s, a falha pode ser anterior ou posterior ao clique (Q-68).
     volta = primeiro_s if primeiro_s is not None and primeiro_s < DURACAO else None
     marcos["gravacao_voltou_s"] = volta
-    if volta is None and erro_na_conferencia is None:
+    # Sem o histórico consultado, não se sabe se a gravação voltou; a janela fica nos 90 s.
+    consultado = historico is not None
+    if volta is None and consultado:
         print("A gravação dos cliques não voltou na etapa", flush=True)
 
     fim_da_queda = DURACAO if volta is None else max(volta, ultima or volta)
     queda = metricas(disparo, PARADA, fim_da_queda)
-    contador_na_queda = [leitura_em(leituras.amostras, t, "contador") for t in (PARADA, fim_da_queda)]
+    contador_somou, contador_lido = contador_na_janela(disparo, leituras.amostras, PARADA, fim_da_queda)
     falhas_na_queda = [leitura_em(leituras.amostras, t, "falhas") for t in (PARADA, fim_da_queda)]
     queda |= {
-        "gravacao_voltou_na_etapa": volta is not None,
-        "contador_somou": None if None in contador_na_queda else contador_na_queda[1] - contador_na_queda[0],
+        "gravacao_voltou_na_etapa": (volta is not None) if consultado else None,
+        "contador_somou": contador_somou,  # None: sem leitura válida ou com envios demais fora das leituras
+        "contador_lido_s": contador_lido,
         "falhas_somaram": None if None in falhas_na_queda else falhas_na_queda[1] - falhas_na_queda[0],
     }
-    queda["ca6"] = (not erros_no_controle and queda["envios"] > 0 and queda["respostas_302"] == queda["envios"]
+    # Uma rodada inválida não prova nem refuta o CA-6: precisa ser repetida.
+    invalida = [f"o controle do Cassandra falhou ({'; '.join(erros_no_controle)})"] if erros_no_controle else []
+    if contador_somou is None:
+        invalida.append("o contador da janela ficou indeterminado (Q-69)")
+    queda["ca6"] = (not invalida and queda["envios"] > 0 and queda["respostas_302"] == queda["envios"]
                     and queda["p95_servidor_ms"] is not None and queda["p95_servidor_ms"] < TETO_P95_MS
                     and (queda["contador_somou"] or 0) >= queda["envios"] - MARGEM_CONTADOR
                     and (queda["falhas_somaram"] or 0) > 0)
@@ -480,7 +502,8 @@ def main() -> int:
         "parada_manual": docker is None,
         "fim_da_carga_s": fim_da_carga,
         "marcos": marcos,
-        "erros_no_controle": erros_no_controle,  # algum: a rodada não vale para o CA-6
+        "erros_no_controle": erros_no_controle,
+        "rodada_invalida": invalida,  # algum motivo: a rodada não vale para o CA-6 e precisa ser repetida
         "total": metricas(disparo, 0.0, DURACAO),
         "fases": {nome: metricas(disparo, *janela) for nome, janela in FASES.items()},
         "queda": queda,
