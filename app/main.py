@@ -1,9 +1,11 @@
 import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import redis
 from cassandra.cluster import Cluster
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 from pymongo import MongoClient
 from pymongo.collection import Collection
 from redis.backoff import NoBackoff
@@ -14,6 +16,7 @@ from app.cliques import RegistroDeCliques
 from app.router import router
 
 TEMPO_LIMITE_CLIQUE = 2.0  # segundos (Q-41)
+PASTA_ESTATICA = Path(__file__).parent / "static"
 
 
 @asynccontextmanager
@@ -71,6 +74,7 @@ def criar_app(
     app.state.cliques = cliques
     app.state.consultas = consultas
     app.include_router(router)
+    app.mount("/static", StaticFiles(directory=PASTA_ESTATICA), name="static")
     return app
 
 

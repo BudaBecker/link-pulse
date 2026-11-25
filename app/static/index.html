@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LinkPulse</title>
+  <link rel="stylesheet" href="/static/painel.css">
+  <script defer src="/static/vendor/chart.js-4.6.1/chart.umd.min.js"></script>
+  <script defer src="/static/dados.js"></script>
+  <script defer src="/static/painel.js"></script>
+</head>
+<body>
+  <div class="aplicacao">
+    <aside class="lateral" aria-label="Cliente e links">
+      <div class="marca">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 13a4 4 0 0 0 6 .4l4-4a4 4 0 0 0-5.7-5.7l-2.1 2.1m1.8 5.2a4 4 0 0 0-6-.4l-4 4a4 4 0 0 0 5.7 5.7l2.1-2.1"/></svg>
+        LinkPulse
+      </div>
+      <div class="seletor-cliente">
+        <label for="cliente">Cliente</label>
+        <select id="cliente" disabled><option value="">Carregando clientes…</option></select>
+      </div>
+      <div class="acoes">
+        <button type="button" class="botao primario" data-abrir="novo-link" disabled>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+          Novo link
+        </button>
+        <button type="button" class="botao" data-abrir="nova-campanha" disabled>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10v4h5l12 4V6L8 10H3zm5 4 2 6h3l-2-5"/></svg>
+          Nova campanha
+        </button>
+        <button type="button" class="botao" data-abrir="novo-cliente" disabled>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"/><path d="M3 20v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2m4-13v6m-3-3h6"/></svg>
+          Novo cliente
+        </button>
+      </div>
+      <section class="listas" aria-labelledby="titulo-links">
+        <h2 id="titulo-links">Links</h2>
+        <p id="mensagem-links" class="texto-secundario">Carregando…</p>
+        <ul id="lista-links" class="lista-links"></ul>
+      </section>
+    </aside>
+
+    <main class="conteudo">
+      <p id="aviso" class="aviso" role="status" hidden></p>
+
+      <div class="painel">
+        <header class="cabecalho">
+          <h1>Desempenho do link</h1>
+          <div id="cabecalho-link" hidden>
+            <div class="linha-link">
+              <div class="link-curto">
+                <strong id="nome-link"></strong>
+                <a id="endereco-curto" target="_blank" rel="noopener noreferrer"></a>
+                <button id="copiar" type="button" class="botao compacto">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>
+                  <span id="rotulo-copiar">Copiar link</span>
+                </button>
+                <span id="retorno-copiar" class="sr-only" role="status"></span>
+              </div>
+              <span class="atualizacao">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/></svg>
+                <time id="ultima-atualizacao">Aguardando dados</time>
+              </span>
+            </div>
+            <details id="detalhes-link" class="detalhes-link">
+              <summary>Detalhes do link</summary>
+              <dl>
+                <div><dt>URL de destino</dt><dd id="destino-link"></dd></div>
+                <div><dt>Criado em</dt><dd id="criado-link"></dd></div>
+                <div><dt>Expiração</dt><dd id="expiracao-link"></dd></div>
+              </dl>
+            </details>
+          </div>
+        </header>
+
+        <section id="estado-vazio" class="cartao estado-vazio" aria-labelledby="titulo-vazio">
+          <h2 id="titulo-vazio">Carregando clientes…</h2>
+          <p id="explicacao-vazio" class="texto-secundario"></p>
+          <button type="button" id="acao-vazio" class="botao primario" hidden></button>
+        </section>
+
+        <section id="resumo" class="cartao resumo" aria-label="Resumo do link" hidden>
+          <div class="bloco-resumo">
+            <h2>Cliques nos últimos 7 dias</h2>
+            <p class="valor" id="total">—</p>
+            <p class="texto-secundario" id="intervalo"></p>
+          </div>
+          <div class="bloco-resumo">
+            <h2>Cliques desde a criação</h2>
+            <p class="valor" id="contador">—</p>
+            <p class="texto-secundario">Contador em tempo real. Pode ser maior que o histórico.</p>
+          </div>
+          <div class="bloco-resumo campanha">
+            <h2>Campanha</h2>
+            <p id="nome-campanha" class="nome-campanha" hidden></p>
+            <p id="descricao-campanha" class="texto-secundario"></p>
+            <ul id="tags-campanha" class="tags" aria-label="Tags da campanha" hidden></ul>
+          </div>
+        </section>
+
+        <section id="dia" class="cartao grafico-dia" aria-labelledby="titulo-dia" hidden>
+          <div class="titulo-cartao">
+            <h2 id="titulo-dia">Cliques por dia</h2>
+            <span id="intervalo-dia" class="texto-secundario"></span>
+          </div>
+          <p id="estado-dia" class="estado-grafico texto-secundario">Carregando cliques…</p>
+          <div id="dados-dia" hidden>
+            <div id="quadro-dia" class="quadro-dia"><canvas id="grafico-dia" aria-hidden="true"></canvas></div>
+            <div id="quadro-tabela-dia" class="sr-only">
+              <table id="tabela-dia">
+                <caption>Cliques por dia nos últimos 7 dias</caption>
+                <thead><tr><th scope="col">Dia</th><th scope="col">Cliques</th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <section id="dispositivos" class="cartao dispositivos" aria-labelledby="titulo-dispositivos" hidden>
+          <h2 id="titulo-dispositivos">Cliques por dispositivo</h2>
+          <p id="estado-dispositivos" class="estado-grafico texto-secundario">Carregando cliques…</p>
+          <div id="dados-dispositivos" class="dados-dispositivos" hidden>
+            <div id="rosca" class="rosca" aria-hidden="true">
+              <div id="quadro-dispositivos" class="quadro-dispositivos"><canvas id="grafico-dispositivos"></canvas></div>
+              <div class="centro-rosca"><strong id="total-dispositivos"></strong><span id="unidade-dispositivos">cliques</span></div>
+            </div>
+            <ul id="legenda-dispositivos" class="legenda-dispositivos"></ul>
+          </div>
+        </section>
+
+        <section id="canais" class="cartao canais" aria-labelledby="titulo-canais" hidden>
+          <h2 id="titulo-canais">Cliques por canal</h2>
+          <p id="estado-canais" class="estado-grafico texto-secundario">Carregando cliques…</p>
+          <div id="dados-canais" class="dados-canais" hidden>
+            <p id="periodo-canais" class="texto-secundario">Do total do cliente nos últimos 7 dias</p>
+            <div class="linhas-canais">
+              <div class="quadro-canais"><canvas id="grafico-canais" aria-hidden="true"></canvas></div>
+              <ol id="lista-canais" class="lista-canais" aria-describedby="periodo-canais"></ol>
+            </div>
+          </div>
+        </section>
+      </div>
+      <noscript><p class="aviso">Ative o JavaScript para usar o painel.</p></noscript>
+    </main>
+  </div>
+
+  <template id="icone-link">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 13a4 4 0 0 0 6 .4l4-4a4 4 0 0 0-5.7-5.7l-2.1 2.1m1.8 5.2a4 4 0 0 0-6-.4l-4 4a4 4 0 0 0 5.7 5.7l2.1-2.1"/></svg>
+  </template>
+
+  <dialog id="novo-cliente" aria-labelledby="titulo-novo-cliente">
+    <form data-rota="clientes" novalidate>
+      <h2 id="titulo-novo-cliente">Novo cliente</h2>
+      <div class="campo">
+        <label for="cliente-nome">Nome</label>
+        <input id="cliente-nome" name="nome" required autofocus aria-describedby="erro-cliente-nome">
+        <p id="erro-cliente-nome" class="erro-campo" hidden></p>
+      </div>
+      <p class="erro-formulario" role="alert" hidden></p>
+      <div class="acoes-formulario">
+        <button type="button" class="botao" data-fechar>Cancelar</button>
+        <button type="submit" class="botao primario">Cadastrar cliente</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="nova-campanha" aria-labelledby="titulo-nova-campanha">
+    <form data-rota="campanhas" novalidate>
+      <h2 id="titulo-nova-campanha">Nova campanha</h2>
+      <div class="campo">
+        <label for="campanha-nome">Nome</label>
+        <input id="campanha-nome" name="nome" required autofocus aria-describedby="erro-campanha-nome">
+        <p id="erro-campanha-nome" class="erro-campo" hidden></p>
+      </div>
+      <div class="campo">
+        <label for="campanha-descricao">Descrição <span>opcional</span></label>
+        <textarea id="campanha-descricao" name="descricao" rows="3" aria-describedby="erro-campanha-descricao"></textarea>
+        <p id="erro-campanha-descricao" class="erro-campo" hidden></p>
+      </div>
+      <div class="campo">
+        <label for="campanha-tags">Tags <span>opcionais</span></label>
+        <input id="campanha-tags" name="tags" aria-describedby="ajuda-tags erro-campanha-tags">
+        <p id="ajuda-tags" class="ajuda-campo">Separe as tags por vírgulas.</p>
+        <p id="erro-campanha-tags" class="erro-campo" hidden></p>
+      </div>
+      <p class="erro-formulario" role="alert" hidden></p>
+      <div class="acoes-formulario">
+        <button type="button" class="botao" data-fechar>Cancelar</button>
+        <button type="submit" class="botao primario">Cadastrar campanha</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="novo-link" aria-labelledby="titulo-novo-link">
+    <form data-rota="links" novalidate>
+      <h2 id="titulo-novo-link">Novo link</h2>
+      <div class="campo">
+        <label for="link-url">URL de destino</label>
+        <input id="link-url" type="url" name="url" required autofocus aria-describedby="ajuda-url erro-link-url">
+        <p id="ajuda-url" class="ajuda-campo">Informe o endereço completo, incluindo o protocolo.</p>
+        <p id="erro-link-url" class="erro-campo" hidden></p>
+      </div>
+      <div class="campo">
+        <label for="link-canal">Canal <span>opcional</span></label>
+        <input id="link-canal" name="canal" placeholder="Ex.: E-mail" aria-describedby="erro-link-canal">
+        <p id="erro-link-canal" class="erro-campo" hidden></p>
+      </div>
+      <div class="campo">
+        <label for="link-campanha">Campanha <span>opcional</span></label>
+        <select id="link-campanha" name="campanha_id" aria-describedby="erro-link-campanha"></select>
+        <p id="erro-link-campanha" class="erro-campo" hidden></p>
+      </div>
+      <div class="campo">
+        <label for="link-expiracao">Data e hora de expiração <span>opcionais</span></label>
+        <input id="link-expiracao" name="expira_em" type="datetime-local" aria-describedby="ajuda-expiracao erro-link-expiracao">
+        <p id="ajuda-expiracao" class="ajuda-campo">Use o horário deste computador.</p>
+        <p id="erro-link-expiracao" class="erro-campo" hidden></p>
+      </div>
+      <p class="erro-formulario" role="alert" hidden></p>
+      <div class="acoes-formulario">
+        <button type="button" class="botao" data-fechar>Cancelar</button>
+        <button type="submit" class="botao primario">Criar link</button>
+      </div>
+    </form>
+  </dialog>
+</body>
+</html>

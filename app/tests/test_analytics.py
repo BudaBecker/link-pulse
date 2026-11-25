@@ -7,21 +7,24 @@ from fastapi.testclient import TestClient
 
 from app.analytics import ConsultasDeCliques
 from app.main import criar_app
-from app.tests.test_redirecionamento import acessar, criar_link, esperar_cliques
+from app.tests.test_redirecionamento import IPHONE, acessar, criar_link, esperar_cliques
 
 INICIO = "2026-11-20T00:00:00-03:00"
 FIM = "2026-11-22T23:59:59.999-03:00"
+WINDOWS = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0 Safari/537.36"
 
 
 def instante(texto: str) -> datetime:
     return datetime.fromisoformat(texto).astimezone(UTC)
 
 
-def gravar_cliques(sessao, codigo: str, *instantes: str) -> None:
-    insercao = sessao.prepare("INSERT INTO cliques_por_link (short_code, clicado_em, clique_id) VALUES (?, ?, ?)")
+def gravar_cliques(sessao, codigo: str, *instantes: str, dispositivo: str | None = None) -> None:
+    insercao = sessao.prepare(
+        "INSERT INTO cliques_por_link (short_code, clicado_em, clique_id, dispositivo) VALUES (?, ?, ?, ?)"
+    )
     for texto in instantes:
         momento = instante(texto)
-        sessao.execute(insercao, (codigo, momento, uuid_from_time(momento)))
+        sessao.execute(insercao, (codigo, momento, uuid_from_time(momento), dispositivo))
 
 
 def consultar(api, consulta: str, **parametros):
@@ -107,6 +110,28 @@ def test_total_conta_o_intervalo_fechado(api, eventos):
     }
 
 
+def test_cliques_por_dispositivo_traz_as_quatro_categorias(api, sessao_cassandra):
+    codigo = criar_link(api)
+    gravar_cliques(sessao_cassandra, codigo, "2026-11-20T03:00:00.000Z", "2026-11-21T12:00:00Z", dispositivo="mobile")
+    gravar_cliques(sessao_cassandra, codigo, "2026-11-21T12:00:00Z", "2026-11-21T12:00:00Z", dispositivo="mobile")
+    gravar_cliques(sessao_cassandra, codigo, "2026-11-23T02:59:59.999Z", dispositivo="desktop")
+    gravar_cliques(sessao_cassandra, codigo, "2026-11-22T10:00:00Z", dispositivo="outro")
+    gravar_cliques(sessao_cassandra, codigo, "2026-11-20T02:59:59.999Z", "2026-11-23T03:00:00.000Z", dispositivo="tablet")
+
+    resposta = consultar(api, "por-dispositivo", short_code=codigo)
+
+    assert resposta.status_code == 200
+    assert resposta.json() == {
+        "short_code": codigo,
+        "dispositivos": [
+            {"dispositivo": "mobile", "cliques": 4},
+            {"dispositivo": "desktop", "cliques": 1},
+            {"dispositivo": "tablet", "cliques": 0},
+            {"dispositivo": "outro", "cliques": 1},
+        ],
+    }
+
+
 def test_janela_de_um_unico_instante(api, eventos):
     resposta = consultar(api, "total", short_code=eventos["instagram"], inicio=INICIO, fim=INICIO)
 
@@ -131,7 +156,7 @@ def test_limites_com_fracao_de_milissegundo_respeitam_o_intervalo_fechado(
     api, sessao_cassandra, inicio, fim, esperado, separador
 ):
     codigo = criar_link(api, cliente_id="c3")
-    gravar_cliques(sessao_cassandra, codigo, "2026-11-20T12:00:00.000Z")
+    gravar_cliques(sessao_cassandra, codigo, "2026-11-20T12:00:00.000Z", dispositivo="mobile")
     janela = {"inicio": inicio.replace(".", separador), "fim": fim.replace(".", separador)}
 
     assert consultar(api, "total", short_code=codigo, **janela).json()["cliques"] == esperado
@@ -139,6 +164,8 @@ def test_limites_com_fracao_de_milissegundo_respeitam_o_intervalo_fechado(
         {"dia": "2026-11-20", "cliques": esperado}
     ]
     assert consultar(api, "por-canal", cliente_id="c3", **janela).json()["canais"][0]["cliques"] == esperado
+    dispositivos = consultar(api, "por-dispositivo", short_code=codigo, **janela).json()["dispositivos"]
+    assert sum(d["cliques"] for d in dispositivos) == esperado
 
 
 @pytest.mark.parametrize(
@@ -156,12 +183,13 @@ def test_inicio_depois_do_fim_alem_do_microssegundo_responde_422(api, inicio, fi
     assert consultar(api, "total", short_code=codigo, **janela).status_code == 422
     assert consultar(api, "por-dia", short_code=codigo, **janela).status_code == 422
     assert consultar(api, "por-canal", cliente_id="c3", **janela).status_code == 422
+    assert consultar(api, "por-dispositivo", short_code=codigo, **janela).status_code == 422
 
 
 def test_consultas_refletem_os_redirecionamentos(api, sessao_cassandra):
     codigo = criar_link(api, canal="instagram")
-    for _ in range(3):
-        assert acessar(api, codigo).status_code == 302
+    for user_agent in (IPHONE, IPHONE, WINDOWS):
+        assert acessar(api, codigo, **{"user-agent": user_agent}).status_code == 302
     assert len(esperar_cliques(sessao_cassandra, codigo, 3)) == 3
 
     agora = datetime.now(UTC)
@@ -171,6 +199,12 @@ def test_consultas_refletem_os_redirecionamentos(api, sessao_cassandra):
     assert sum(d["cliques"] for d in consultar(api, "por-dia", short_code=codigo, **janela).json()["dias"]) == 3
     assert consultar(api, "por-canal", cliente_id="c1", **janela).json()["canais"] == [
         {"short_code": codigo, "canal": "instagram", "cliques": 3}
+    ]
+    assert consultar(api, "por-dispositivo", short_code=codigo, **janela).json()["dispositivos"] == [
+        {"dispositivo": "mobile", "cliques": 2},
+        {"dispositivo": "desktop", "cliques": 1},
+        {"dispositivo": "tablet", "cliques": 0},
+        {"dispositivo": "outro", "cliques": 0},
     ]
 
 
@@ -202,15 +236,16 @@ def test_consultas_executadas_informam_short_code_sem_allow_filtering(
     consultar(api, "por-dia", short_code=eventos["instagram"])
     consultar(api, "por-canal", cliente_id="c1")
     consultar(api, "total", short_code=eventos["instagram"])
+    consultar(api, "por-dispositivo", short_code=eventos["instagram"])
 
-    assert len(sessao.executados) == 1 + 4 + 1
+    assert len(sessao.executados) == 1 + 4 + 1 + 1
     assert set(sessao.executados) <= set(sessao.preparados)
     for comando in sessao.preparados:
         assert re.search(r"\bFROM cliques_por_link WHERE short_code = \?", comando), comando
         assert "ALLOW FILTERING" not in comando.upper(), comando
 
 
-@pytest.mark.parametrize("consulta", ["por-dia", "total"])
+@pytest.mark.parametrize("consulta", ["por-dia", "total", "por-dispositivo"])
 def test_link_inexistente_responde_404(api, consulta):
     assert consultar(api, consulta, short_code="naoExiste").status_code == 404
 
@@ -220,6 +255,8 @@ def test_link_sem_cliques_responde_zeros(api):
 
     assert consultar(api, "total", short_code=codigo).json()["cliques"] == 0
     assert [d["cliques"] for d in consultar(api, "por-dia", short_code=codigo).json()["dias"]] == [0, 0, 0]
+    dispositivos = consultar(api, "por-dispositivo", short_code=codigo).json()["dispositivos"]
+    assert [d["cliques"] for d in dispositivos] == [0, 0, 0, 0]
 
 
 def test_cliente_sem_links_responde_lista_vazia(api):
@@ -242,7 +279,7 @@ def test_cliente_sem_links_responde_lista_vazia(api):
         {"inicio": FIM, "fim": INICIO},
     ],
 )
-@pytest.mark.parametrize("consulta", ["por-dia", "total"])
+@pytest.mark.parametrize("consulta", ["por-dia", "total", "por-dispositivo"])
 def test_janela_invalida_responde_422(api, consulta, parametros):
     codigo = criar_link(api)
     pedido = {"short_code": codigo, "inicio": INICIO, "fim": FIM} | parametros
