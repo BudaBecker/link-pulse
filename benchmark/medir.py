@@ -132,9 +132,11 @@ def subir_api(log) -> subprocess.Popen:
         sys.exit(f"a porta {PORTA_API} já está em uso; encerre o processo que a ocupa e repita")
     except OSError:
         pass
+    # Um processo só, qualquer que seja o WEB_CONCURRENCY do terminal: as falhas em `/metricas` ficam na memória
+    # de cada processo, e a leitura veria as de um só.
     api = subprocess.Popen(
         [python_do_venv(), "-m", "uvicorn", "benchmark.api_cronometrada:app", "--port", str(PORTA_API),
-         "--no-access-log"], cwd=RAIZ, stdout=log, stderr=subprocess.STDOUT,
+         "--workers", "1", "--no-access-log"], cwd=RAIZ, stdout=log, stderr=subprocess.STDOUT,
         env={**os.environ, **CONEXOES_DA_API})
     limite = time.monotonic() + PRAZO_API
     while time.monotonic() < limite:
@@ -194,9 +196,13 @@ def resumo_da_queda(r: dict) -> None:
     print("  marcos (s): " + " · ".join(f"{k.removesuffix('_s')} {v}" for k, v in m.items()))
     print(f"  conferência: contador {numero(c['contador'], '+')} · histórico {numero(c['historico'], '+')} · "
           f"falhas {numero(c['falhas'], '+')} · diferença {numero(c['diferenca_contador_historico'])} "
-          f"(diferença menos falhas: {numero(c['diferenca_menos_falhas'])})")
-    print(f"  CA-6 nesta execução: {'cumprido' if q['ca6'] else 'NÃO cumprido'} · CPU do gerador "
-          f"{r['cpu_gerador_nucleos']} núcleos ({r['cpu_gerador_pct']}%)")
+          f"(diferença menos falhas: {numero(c['diferenca_menos_falhas'])})"
+          + (f" · a consulta ao Cassandra falhou: {c['erro']}" if c["erro"] else ""))
+    ca6 = "cumprido" if q["ca6"] else "NÃO cumprido"
+    if r["erros_no_controle"]:
+        ca6 = f"rodada inválida, o controle do Cassandra falhou ({'; '.join(r['erros_no_controle'])}); repita"
+    print(f"  CA-6 nesta execução: {ca6} · CPU do gerador {r['cpu_gerador_nucleos']} núcleos "
+          f"({r['cpu_gerador_pct']}%)")
 
 
 def linhas_de_operacao(execucao: dict) -> list[tuple[str, dict]]:

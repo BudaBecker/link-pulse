@@ -28,7 +28,8 @@ from datetime import UTC, datetime, timedelta
 from urllib.parse import urlsplit
 
 import redis
-from cassandra.cluster import Cluster
+from cassandra import DriverException
+from cassandra.cluster import Cluster, NoHostAvailable
 
 from carregar import MANIFESTO
 from gerador import cpu_usada_s, cpus_do_limite, memoria_pico_mib, percentil
@@ -45,6 +46,9 @@ INTERVALO_LEITURA = 0.25  # s, entre as leituras das falhas e do contador, e ent
 ESPERA_FINAL = 10.0  # s depois da carga, cinco vezes o tempo limite da gravação (Q-41, Q-67)
 PRAZO_VOLTA = 60.0  # s sem carga esperando o Cassandra, se ele não voltou na etapa (Q-66)
 TETO_P95_MS = 50.0  # RNF-02
+# Cada borda da janela cai entre duas leituras do contador: o aumento lido pode ficar até os envios de uma
+# leitura abaixo dos envios da janela em cada borda (Q-69).
+MARGEM_CONTADOR = 2 * round(TAXA * INTERVALO_LEITURA)
 FASES = {"antes": (0.0, PARADA), "parado": (PARADA, RELIGAMENTO), "volta": (RELIGAMENTO, DURACAO)}
 
 
@@ -178,7 +182,9 @@ class Leituras:
             return None
 
     def ler(self, partida: float) -> dict:
-        amostra = {"t": round(time.perf_counter() - partida, 3), "falhas": self.falhas(), "contador": self.contador()}
+        falhas = self.falhas()
+        # O instante é o fim da leitura das falhas: um aumento visto nela pode ter acontecido até ali (Q-68).
+        amostra = {"t": round(time.perf_counter() - partida, 3), "falhas": falhas, "contador": self.contador()}
         self.amostras.append(amostra)
         return amostra
 
@@ -206,8 +212,19 @@ def sondar_porta(partida: float, sondagens: list[tuple[float, bool]], parar: thr
         parar.wait(INTERVALO_LEITURA)
 
 
-def controlar(docker: Docker | None, conteiner: str, partida: float, marcos: dict) -> None:
-    """Para o Cassandra aos 30 s e o religa aos 60 s, sem esperar o healthcheck (Q-65)."""
+def controlar(docker: Docker | None, conteiner: str, partida: float, marcos: dict, erros: list[str]) -> None:
+    """Para o Cassandra aos 30 s e o religa aos 60 s, sem esperar o healthcheck (Q-65).
+
+    Um comando do Docker que falha vai para `erros`, e a rodada não vale para o CA-6.
+    """
+    try:
+        _controlar(docker, conteiner, partida, marcos)
+    except Exception as erro:
+        erros.append(f"{type(erro).__name__}: {erro}"[:200])
+        print(f"[{time.perf_counter() - partida:5.1f} s] o controle do Cassandra falhou: {erros[-1]}", flush=True)
+
+
+def _controlar(docker: Docker | None, conteiner: str, partida: float, marcos: dict) -> None:
     def no_instante(t: float) -> None:
         time.sleep(max(0.0, partida + t - time.perf_counter()))
 
@@ -370,6 +387,7 @@ def main() -> int:
     leituras.amostras.clear()
 
     marcos: dict = {}
+    erros_no_controle: list[str] = []
     limite_cpu = cpus_do_limite()
     print(f"queda: {TAXA} redirecionamentos por segundo em {codigo}, {DURACAO:.0f} s; o Cassandra para aos "
           f"{PARADA:.0f} s e volta aos {RELIGAMENTO:.0f} s{' (parada manual)' if docker is None else ''}", flush=True)
@@ -380,7 +398,8 @@ def main() -> int:
                 threading.Thread(target=sondar_porta, args=(partida, sondagens, leituras.parar), daemon=True)]
     for leitora in leitoras:
         leitora.start()
-    controle = threading.Thread(target=controlar, args=(docker, args.cassandra, partida, marcos), daemon=True)
+    controle = threading.Thread(target=controlar, args=(docker, args.cassandra, partida, marcos, erros_no_controle),
+                                daemon=True)
     controle.start()
     time.sleep(max(0.0, partida - time.perf_counter()))
     cpu_antes, relogio_antes = cpu_usada_s(), time.perf_counter()
@@ -405,10 +424,15 @@ def main() -> int:
     marcos |= {"porta_fechada_s": fechada, "porta_aberta_s": aberta, "ultima_falha_s": ultima}
     parada_concluida = marcos.get("parada_concluida_s", fechada)
     instante = lambda t: None if t is None else inicio + timedelta(seconds=t)  # noqa: E731
-    historico, primeiro = None, None
+    historico, primeiro, erro_na_conferencia = None, None, None
     if cassandra_no_ar:
-        historico, primeiro = cliques_no_historico(codigo, inicio - timedelta(seconds=0.5),
-                                                   instante(parada_concluida))
+        try:
+            historico, primeiro = cliques_no_historico(codigo, inicio - timedelta(seconds=0.5),
+                                                       instante(parada_concluida))
+        except (DriverException, NoHostAvailable) as erro:
+            erro_na_conferencia = f"{type(erro).__name__}: {erro}"[:200]
+            print(f"A consulta ao Cassandra falhou ({erro_na_conferencia}); o resultado sai sem a conferência "
+                  "do histórico e sem a volta da gravação", flush=True)
     primeiro_s = None if primeiro is None else round((primeiro - inicio).total_seconds(), 3)
     marcos["primeiro_clique_gravado_apos_parada_s"] = primeiro_s
     # A volta é o primeiro clique gravado depois da parada, dentro da carga; sem ele, a janela vai até o fim.
@@ -416,7 +440,7 @@ def main() -> int:
     # cada 0,25 s, a falha pode ser anterior ou posterior ao clique (Q-68).
     volta = primeiro_s if primeiro_s is not None and primeiro_s < DURACAO else None
     marcos["gravacao_voltou_s"] = volta
-    if volta is None:
+    if volta is None and erro_na_conferencia is None:
         print("A gravação dos cliques não voltou na etapa", flush=True)
 
     fim_da_queda = DURACAO if volta is None else max(volta, ultima or volta)
@@ -428,16 +452,18 @@ def main() -> int:
         "contador_somou": None if None in contador_na_queda else contador_na_queda[1] - contador_na_queda[0],
         "falhas_somaram": None if None in falhas_na_queda else falhas_na_queda[1] - falhas_na_queda[0],
     }
-    queda["ca6"] = (queda["envios"] > 0 and queda["respostas_302"] == queda["envios"]
+    queda["ca6"] = (not erros_no_controle and queda["envios"] > 0 and queda["respostas_302"] == queda["envios"]
                     and queda["p95_servidor_ms"] is not None and queda["p95_servidor_ms"] < TETO_P95_MS
-                    and (queda["contador_somou"] or 0) > 0 and (queda["falhas_somaram"] or 0) > 0)
+                    and (queda["contador_somou"] or 0) >= queda["envios"] - MARGEM_CONTADOR
+                    and (queda["falhas_somaram"] or 0) > 0)
 
     aumento = {campo: None if depois[campo] is None else depois[campo] - antes[campo]
                for campo in ("contador", "falhas")}
     diferenca = None if None in (aumento["contador"], historico) else aumento["contador"] - historico
     conferencia = {
         "contador": aumento["contador"],
-        "historico": historico,  # None: o Cassandra não voltou a tempo da conferência
+        "historico": historico,  # None: o Cassandra não voltou a tempo da conferência, ou a consulta falhou
+        "erro": erro_na_conferencia,
         "falhas": aumento["falhas"],
         "diferenca_contador_historico": diferenca,
         "diferenca_menos_falhas": None if None in (diferenca, aumento["falhas"]) else diferenca - aumento["falhas"],
@@ -454,6 +480,7 @@ def main() -> int:
         "parada_manual": docker is None,
         "fim_da_carga_s": fim_da_carga,
         "marcos": marcos,
+        "erros_no_controle": erros_no_controle,  # algum: a rodada não vale para o CA-6
         "total": metricas(disparo, 0.0, DURACAO),
         "fases": {nome: metricas(disparo, *janela) for nome, janela in FASES.items()},
         "queda": queda,
