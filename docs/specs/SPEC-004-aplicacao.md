@@ -33,6 +33,7 @@ Os dados e as chaves estão em [ARQUITETURA](../arquitetura/ARQUITETURA.md) Pass
 - `POST /campanhas {cliente_id, nome, descricao?, tags?}` grava um documento no MongoDB e responde `201` com o `campanha_id`.
 - O documento guarda `cliente_id`, `nome`, `descricao`, `tags` e a lista `links`, que começa vazia.
 - O pedido sem `cliente_id` ou sem `nome` é rejeitado com `422` e nada é gravado (Q-40).
+- `GET /campanhas?cliente_id=…` responde `200 [{campanha_id, nome, descricao, tags, links}]`, com as campanhas do cliente em ordem de nome, e lista vazia se não houver nenhuma; sem `cliente_id`, `422` (Q-50).
 
 ### Criação de link
 
@@ -44,6 +45,8 @@ Os dados e as chaves estão em [ARQUITETURA](../arquitetura/ARQUITETURA.md) Pass
 4. Inclui o `short_code` no Set `links:cliente:{cliente_id}`.
 5. Se houver `campanha_id`, acrescenta o `short_code` à lista `links` da campanha.
 6. Responde `201` com o `short_code` só depois da confirmação do Redis. Se a gravação no Redis falhar, ou se as novas tentativas depois de colisões se esgotarem, responde `503`, sem `short_code` (Q-40).
+
+`GET /links?cliente_id=…` responde `200 [{short_code, url, canal, criado_em, expira_em, contador}]`, com os links do Set `links:cliente:{cliente_id}`, lidos do master, em ordem decrescente de `criado_em`. `contador` é o valor de `contador:{short_code}`, `0` antes do primeiro clique; `canal` e `expira_em` vêm nulos quando o link não os tem. Cliente sem links dá lista vazia; sem `cliente_id`, `422` (Q-54).
 
 ### Redirecionamento
 
@@ -59,13 +62,16 @@ Os dados e as chaves estão em [ARQUITETURA](../arquitetura/ARQUITETURA.md) Pass
 
 ### Consultas e painel
 
-- As três consultas de analytics recebem `inicio` e `fim` na query string, em ISO 8601 com fuso, e contam os cliques do intervalo fechado `[inicio, fim]` (Q-45):
+- As quatro consultas de analytics recebem `inicio` e `fim` na query string, em ISO 8601 com fuso, e contam os cliques do intervalo fechado `[inicio, fim]` (Q-45):
   - `GET /analytics/por-dia?short_code=…` responde `{short_code, dias: [{dia, cliques}]}`, com um item para cada dia que o intervalo toca, em `AAAA-MM-DD` e em ordem crescente, e `0` nos dias sem clique (Q-46). Os dias são os do horário de Brasília (`America/Sao_Paulo`), e os instantes continuam gravados em UTC (Q-47).
   - `GET /analytics/por-canal?cliente_id=…` lê os links do Set `links:cliente:{cliente_id}` e o `canal` de cada um, e responde `{cliente_id, canais: [{short_code, canal, cliques}]}`, com todos os links do cliente, inclusive os sem clique, e `canal` nulo no link sem canal, em ordem decrescente de cliques e, no empate, de `short_code` (Q-46).
+  - `GET /analytics/por-dispositivo?short_code=…` responde `{short_code, dispositivos: [{dispositivo, cliques}]}`, sempre com as quatro categorias, na ordem `mobile`, `desktop`, `tablet` e `outro`, e `0` nas que não têm clique (Q-49).
   - `GET /analytics/total?short_code=…` responde `{short_code, cliques}` (Q-46).
 - O pedido sem `short_code`, `cliente_id`, `inicio` ou `fim`, com data sem fuso ou com `inicio` depois de `fim` é rejeitado com `422`. Um `short_code` que não existe no Redis responde `404`; um cliente sem links, `200` com `canais` vazia (Q-48).
 - Cada consulta ao Cassandra informa a partition key e não usa `ALLOW FILTERING`.
-- A tela da aplicação é uma página HTML servida pela própria aplicação. Ela permite escolher ou cadastrar um cliente, criar links, e ver o total de cliques, os cliques por dia e por dispositivo de um link e a comparação entre os canais do cliente. Quando o link pertence a uma campanha, a tela mostra a descrição e as tags.
+- A tela da aplicação é uma página HTML servida pela própria aplicação em `GET /`, com os seus arquivos e o Chart.js em `/static/` (Q-54). Ela permite escolher ou cadastrar um cliente, cadastrar campanhas, criar links, e ver o total de cliques, os cliques por dia e por dispositivo de um link e a comparação entre os canais do cliente. Quando o link pertence a uma campanha, a tela mostra a descrição e as tags; ela acha a campanha na lista de `GET /campanhas` cuja lista `links` contém o link (Q-50).
+- A janela da tela é hoje e os 6 dias anteriores, no horário de Brasília: `inicio` à 00:00 de 6 dias atrás e `fim` às 23:59:59.999 de hoje (Q-53). O total da janela vem de `GET /analytics/total`; ao lado, a tela mostra o `contador` do link como cliques desde a criação, que pode ser maior que o histórico (Q-51).
+- A tela refaz as consultas do link e do cliente sozinha a cada 5 s, sem recarregar a página, e mostra a hora da última atualização (Q-52).
 
 ## Plano de implementação
 
@@ -96,4 +102,4 @@ Stack em [ADR-0013](../decisoes/ADR-0013-stack-e-ambiente-do-marco-2.md).
 - [ ] **CA-14** (RNF-02, RN-07) — Dado o Cassandra indisponível, quando recebo `GET /r/{short_code}` válido, então a resposta continua `302`, a latência p95 medida no servidor fica abaixo de 50 ms e o contador de falhas aumenta.
 - [x] **CA-15** (RF-05) — Dado um conjunto conhecido de eventos, quando executo as três consultas de analytics, então cada uma retorna exatamente as contagens esperadas.
 - [x] **CA-16** (RNF-06, RNF-05) — A tabela declara `short_code` como partition key e `CLUSTERING ORDER BY (clicado_em DESC, clique_id DESC)`; nenhuma consulta CQL usa `ALLOW FILTERING`; o ambiente declara um master e uma réplica no Redis e um fator de replicação no keyspace.
-- [ ] **CA-17** (RF-06, RNF-03) — Dado um link com cliques, quando abro o painel, então vejo os agregados por dia e por dispositivo e a comparação entre os canais do cliente, coerentes com o CA-15; um clique novo aparece em até 60 s.
+- [x] **CA-17** (RF-06, RNF-03) — Dado um link com cliques, quando abro o painel, então vejo o total, os agregados por dia e por dispositivo e a comparação entre os canais do cliente, coerentes com as consultas do CA-15 e com a consulta por dispositivo; um clique novo aparece em até 60 s.
