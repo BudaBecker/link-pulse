@@ -367,15 +367,15 @@ Passo 5 do [plano de testes](../docs/specs/SPEC-005-testes-de-stress.md#plano-de
 | Medir a queda sobre o estado atual da base | `python benchmark/medir.py --operacoes queda --sem-restaurar` |
 | Medir parando e religando o Cassandra à mão, com o script de reserva | `python benchmark/medir.py --operacoes queda --queda-manual` e, num segundo terminal, `python benchmark/queda_manual.py parar` e depois `religar`, quando o `medir.py` avisar |
 
-A API roda com as bibliotecas do ambiente virtual da aplicação, em `.venv` ([app/README.md](../app/README.md#como-rodar)). Não é preciso subir nenhuma API antes: o `medir.py` sobe a dele.
+A API roda com as bibliotecas do ambiente virtual da aplicação, em `.venv` ([app/README.md](../app/README.md#como-rodar)). Não é preciso subir nenhuma API antes: o `medir.py` sobe a dele, e recusa começar se a porta 8001 já estiver em uso. O cenário precisa do Docker Desktop, o ambiente da apresentação: a API escuta só em `127.0.0.1`, e é o `host.docker.internal` do Docker Desktop que leva o contêiner até ela. A queda também recusa uma base cujos cliques vão além do momento atual, carregada com `--fim` no futuro, porque a conferência contaria cliques da base como cliques da etapa. Com `--lados postgres` e só a queda, o `medir.py` sai com erro antes de restaurar, porque a queda só tem o lado NoSQL.
 
 **Como funciona:**
 
-- **API.** Depois de restaurar a base, o `medir.py` sobe a API no computador, como na demonstração, com o Python do `.venv` e `uvicorn` na porta 8001, para não disputar a 8000 com a API da demonstração. A API conecta aos bancos no ar, que são os do benchmark, já conferidos pelo `medir.py`. Ela sobe pelo [api_cronometrada.py](api_cronometrada.py), um envoltório que não muda a aplicação. Ele devolve, no cabeçalho `Server-Timing`, o tempo de cada redirecionamento da chegada do pedido ao início da resposta, a mesma medida do teste da aplicação (Q-59). O log da API vai para `benchmark/registros/queda-api-*.log`, e a API é encerrada ao fim da etapa.
+- **API.** Depois de restaurar a base, o `medir.py` sobe a API no computador, como na demonstração, com o Python do `.venv` e `uvicorn` na porta 8001, para não disputar a 8000 com a API da demonstração. A API conecta aos bancos no ar, que são os do benchmark, já conferidos pelo `medir.py`. O endereço dos bancos e o keyspace `linkpulse` são fixados ao subir a API, e as variáveis de conexão do terminal não valem para ela. Ela sobe pelo [api_cronometrada.py](api_cronometrada.py), um envoltório que não muda a aplicação. Ele devolve, no cabeçalho `Server-Timing`, o tempo de cada redirecionamento da chegada do pedido ao início da resposta, a mesma medida do teste da aplicação (Q-59). O log da API vai para `benchmark/registros/queda-api-*.log`, e a API é encerrada ao fim da etapa.
 - **Gerador.** O [queda.py](queda.py) roda no contêiner `gerador-queda` (2 CPUs, 1 GB) e alcança a API por `host.docker.internal`. Todos os envios vão ao link popular. A agenda é fixa: o envio *i* sai em `i / 200` s e vai para o primeiro de 32 workers livre, cada um com uma conexão HTTP persistente. Um envio atrasado sai assim que houver worker livre e nunca é descartado. A latência do gerador conta do instante agendado, então o atraso aparece no resultado em vez de sumir, como acontece no laço fechado (omissão coordenada, nas [consequências do ADR-0014](../docs/decisoes/ADR-0014-modelo-de-dados-e-metodo-do-benchmark.md#consequências)).
 - **Parada e religamento.** O `gerador-queda` é o único serviço com o socket do Docker montado (`/var/run/docker.sock`, aceito pelo Docker Desktop no Windows) e fala com a API do Docker pela biblioteca padrão do Python. Aos 30 s, ele para o contêiner do Cassandra, com o prazo de 10 s do `docker compose stop`. Aos 60 s, dispara o religamento sem esperar o healthcheck: a carga segue a agenda, e outra thread registra quando o Docker marca o Cassandra como saudável.
-- **Leituras.** A cada 0,25 s, o gerador lê `falhas_gravacao_clique` em `GET /metricas` e o contador do link no Redis master. Em outra thread, sonda a porta CQL do Cassandra (9042). A sondagem fica separada porque, com o contêiner parado, resolver o nome `cassandra` leva alguns segundos e atrasaria as leituras.
-- **Volta da gravação.** A aplicação volta a gravar até 2 s depois de o Cassandra aceitar conexões, porque o driver tenta reconectar a cada 2 s, no máximo ([SPEC-004](../docs/specs/SPEC-004-aplicacao.md#redirecionamento), Q-66). O gerador marca a volta na última leitura em que as falhas aumentaram, desde que a carga tenha seguido por mais 2 s sem falha nova. Se a gravação não voltar até os 90 s, o resultado mostra isso, e o gerador espera o Cassandra por até 60 s, sem carga, só para a conferência.
+- **Leituras.** A cada 0,25 s, o gerador lê `falhas_gravacao_clique` em `GET /metricas` e o contador do link no Redis master. Em outra thread, sonda a porta CQL do Cassandra (9042). A sondagem fica separada porque, com o contêiner parado, resolver o nome `cassandra` leva alguns segundos e atrasaria as leituras. A leitura final só acontece depois de as duas threads pararem, para não dividir com elas a conexão com a API.
+- **Volta da gravação.** O driver espera no máximo 2 s entre as tentativas de reconexão ([SPEC-004](../docs/specs/SPEC-004-aplicacao.md#redirecionamento), Q-66). Por isso, depois de o Cassandra abrir a porta CQL, a tentativa seguinte sai em até 2 s. A conexão ainda precisa ser concluída, e só então a primeira escrita chega: a porta aberta, a conexão do driver e a primeira escrita são marcos distintos. O gerador marca a volta na última leitura em que as falhas aumentaram, com três condições: ela vem depois do religamento, e nos 2 s seguintes não há falha nova e todos os envios recebem `302`. A última condição garante que os cliques continuaram a ser gerados: se os redirecionamentos deixassem de responder `302`, as falhas também parariam de subir sem que o Cassandra tivesse voltado. Sem volta na etapa, a janela do CA-6 vai até os 90 s, e o gerador espera o Cassandra por até 60 s, sem carga, só para a conferência. Se ele não voltar nesse prazo, o resultado sai mesmo assim, com o histórico marcado como indisponível (`null`).
 - **Conferência.** 10 s depois do fim da carga, cinco vezes o tempo limite da gravação (Q-41), o gerador lê de novo as falhas e o contador e conta os cliques do link no Cassandra desde o início da etapa. A diferença entre o contador e o histórico são os cliques que o contador somou e o histórico não tem. Ela deve ser igual às falhas, e o resultado mostra quanto se afasta delas, por uma escrita que falhou na aplicação mas foi concluída no Cassandra ou por um incremento perdido no Redis.
 
 **Estado dos dados.** Na sequência de testes, a queda roda depois do pico, sem restaurar: as métricas são aumentos durante a etapa, e o estado inicial não muda o resultado. Medida sozinha, com `--operacoes queda`, a etapa parte da base restaurada, como as outras. A queda só roda quando `--lados` inclui `nosql`.
@@ -392,52 +392,54 @@ A API roda com as bibliotecas do ambiente virtual da aplicação, em `.venv` ([a
 
 O registro traz também a CPU e a memória do gerador, como nas outras etapas. A CPU dos bancos não é lida, porque o Cassandra para no meio da janela.
 
-**Script de reserva.** O [queda_manual.py](queda_manual.py) para (`docker compose stop`) e religa (`docker compose start --wait`) o Cassandra do benchmark e mostra quanto cada passo levou. Ele recusa bancos no ar com os volumes de desenvolvimento, como os comandos da base, mas não pega a trava, porque roda durante a medição, que já está com ela. Com `--queda-manual`, o gerador não mexe no Docker e avisa, aos 30 s e aos 60 s, a hora de rodar cada comando. Nesse modo, ficam de fora os marcos de parada concluída e de Cassandra saudável, e a porta CQL fechada marca a parada.
+**Script de reserva.** O [queda_manual.py](queda_manual.py) para (`docker compose stop`) e religa (`docker compose start --wait`) o Cassandra do benchmark e mostra quanto cada passo levou. Ele recusa bancos no ar com os volumes de desenvolvimento, como os comandos da base, mas não pega a trava, porque roda durante a medição, que já está com ela. Com `--queda-manual`, o gerador roda no serviço `gerador`, que não monta o socket do Docker, e avisa, aos 30 s e aos 60 s, a hora de rodar cada comando. Nesse modo, ficam de fora os marcos de parada concluída e de Cassandra saudável, e a porta CQL fechada marca a parada.
 
 #### Medições
 
-Medido em 25/11/2026, no computador de desenvolvimento (o mesmo das [medições da base](#resultados-medidos)), com a API no Windows e os tetos do [ADR-0013](../docs/decisoes/ADR-0013-stack-e-ambiente-do-marco-2.md#decisão), 2 CPUs e 2 GiB no Cassandra, conferidos com `docker inspect`. A execução de teste começou às 01h27 (horário de Brasília), com `python benchmark/medir.py --operacoes queda`, depois de a base ser restaurada e o CA-1 conferido. Uma segunda execução, às 01h29, usou a parada manual com o script de reserva.
+Medido em 25/11/2026, no computador de desenvolvimento (o mesmo das [medições da base](#resultados-medidos)), com a API no Windows e os tetos do [ADR-0013](../docs/decisoes/ADR-0013-stack-e-ambiente-do-marco-2.md#decisão), 2 CPUs e 2 GiB no Cassandra, conferidos com `docker inspect`. A execução de teste começou às 01h52 (horário de Brasília), com `python benchmark/medir.py --operacoes queda`, depois de a base ser restaurada e o CA-1 conferido. Uma segunda execução, às 01h54, usou a parada manual com o script de reserva.
 
 | Fase | Envios | `302` | p50 no servidor (ms) | p95 no servidor (ms) | p99 no servidor (ms) | p95 no gerador (ms) | Envios atrasados mais de 5 ms |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Antes (0 a 30 s) | 6.000 | 6.000 | 1,149 | 1,564 | 2,062 | 3,136 | 1 |
-| Parado (30 a 60 s) | 6.000 | 6.000 | 1,062 | 1,403 | 1,830 | 2,890 | 5 |
-| Volta (60 a 90 s) | 6.000 | 6.000 | 1,159 | 1,633 | 2,223 | 3,243 | 0 |
-| **Queda vista pela aplicação (30 a 75,25 s)** | **9.050** | **9.050** | 1,092 | **1,465** | 1,915 | 3,000 | 5 |
+| Antes (0 a 30 s) | 6.000 | 6.000 | 1,150 | 1,573 | 2,009 | 3,179 | 1 |
+| Parado (30 a 60 s) | 6.000 | 6.000 | 1,066 | 1,411 | 1,746 | 2,869 | 0 |
+| Volta (60 a 90 s) | 6.000 | 6.000 | 1,477 | 3,321 | 6,986 | 6,626 | 0 |
+| **Queda vista pela aplicação (30 a 75,5 s)** | **9.100** | **9.100** | 1,099 | **1,521** | 1,953 | 3,070 | 0 |
 
-Nenhum envio ficou sem resposta, e o maior atraso de envio foi de 26,6 ms, com o Cassandra parado. O gerador usou 0,09 núcleo (4,3% da cota de 2), com pico de 73 MiB.
+Nenhum envio ficou sem resposta, e o maior atraso de envio foi de 9,2 ms, antes da parada. O gerador usou 0,09 núcleo (4,3% da cota de 2), com pico de 77 MiB.
 
 | Marco, em segundos desde o início da etapa | Execução de teste | Parada manual |
 | --- | ---: | ---: |
 | Parada pedida | 30,0 | 30,0 (aviso) |
-| Porta CQL fechada | 30,1 | 31,6 |
-| Parada concluída (o Docker devolve o `stop`) | 35,8 | — |
+| Porta CQL fechada | 30,1 | 31,9 |
+| Parada concluída (o Docker devolve o `stop`) | 35,9 | — |
 | Religamento pedido | 60,0 | 60,0 (aviso) |
-| Porta CQL aberta | 74,6 | 79,2 |
-| Primeiro clique gravado depois da parada | 75,1 | 79,6 |
-| Volta da gravação, pelas falhas | 75,25 | 79,75 |
+| Porta CQL aberta | 75,0 | 81,5 |
+| Primeiro clique gravado depois da parada | 75,3 | 82,3 |
+| Volta da gravação, pelas falhas | 75,5 | 82,5 |
 | Cassandra saudável pelo healthcheck | 75,9 | — |
 
 | Conferência, 10 s depois da carga | Execução de teste | Parada manual |
 | --- | ---: | ---: |
 | Contador | +18.000 | +18.000 |
-| Histórico | +8.978 | +8.384 |
-| Falhas | +9.022 | +9.616 |
-| Diferença entre o contador e o histórico | 9.022 | 9.616 |
+| Histórico | +8.934 | +7.905 |
+| Falhas | +9.066 | +10.095 |
+| Diferença entre o contador e o histórico | 9.066 | 10.095 |
 | Diferença menos as falhas | 0 | 0 |
 
-Na parada manual, os 9.950 envios da queda vista pela aplicação, dos 30 s aos 79,75 s, receberam `302`, com p95 no servidor de 3,526 ms. O script de reserva levou 3,7 s para parar o Cassandra e 21,0 s para religá-lo até o healthcheck.
+Na parada manual, os 10.500 envios da queda vista pela aplicação, dos 30 s aos 82,5 s, receberam `302`, com p95 no servidor de 2,714 ms. O gerador rodou no serviço `gerador`, sem o socket do Docker. O script de reserva levou 3,7 s para parar o Cassandra e 21,1 s para religá-lo até o healthcheck.
+
+Os aumentos do contador e das falhas na janela vêm das leituras a cada 0,25 s e, por isso, podem diferir dos envios da janela em até cerca de 50 cliques, os envios de 0,25 s. Na execução de teste, o contador somou 9.150 para 9.100 envios. A conferência final não tem essa imprecisão, porque lê os valores depois de a carga terminar.
 
 #### Critérios conferidos
 
-- **CA-6, na execução de teste:** enquanto o Cassandra esteve fora para a aplicação, dos 30 s aos 75,25 s, os 9.050 redirecionamentos responderam `302`, com p95 no servidor de 1,465 ms, abaixo dos 50 ms. Na mesma janela, o contador somou 9.050 e as falhas, 9.022. A diferença são os cliques gravados antes de o Cassandra recusar escritas, aos 30,1 s. A exibição das falhas na tela fica para a tela de testes (RM-32), e as 3 execuções, para a execução completa (RM-33). Por isso o CA-6 continua desmarcado na [SPEC-005](../docs/specs/SPEC-005-testes-de-stress.md#critérios-de-aceitação).
-- **Tempo real de volta:** o Cassandra voltou a aceitar conexões 14,6 s depois do religamento, e a aplicação voltou a gravar 0,7 s depois disso, aos 75,25 s, antes do fim da etapa. A janela de 30 s e a etapa de 90 s continuam valendo, e o aviso do ADR-0014 de que a volta poderia passar dos 30 s previstos foi verificado sem exigir decisão nova.
+- **CA-6, na execução de teste:** enquanto o Cassandra esteve fora para a aplicação, dos 30 s aos 75,5 s, os 9.100 redirecionamentos responderam `302`, com p95 no servidor de 1,521 ms, abaixo dos 50 ms. Na mesma janela, o contador somou 9.150 e as falhas, 9.066. A exibição das falhas na tela fica para a tela de testes (RM-32), e as 3 execuções, para a execução completa (RM-33). Por isso o CA-6 continua desmarcado na [SPEC-005](../docs/specs/SPEC-005-testes-de-stress.md#critérios-de-aceitação).
+- **Tempo real de volta:** o Cassandra voltou a aceitar conexões 15,0 s depois do religamento, e a aplicação voltou a gravar 0,5 s depois disso, aos 75,5 s, antes do fim da etapa. A janela de 30 s e a etapa de 90 s continuam valendo, e o aviso do ADR-0014 de que a volta poderia passar dos 30 s previstos foi verificado sem exigir decisão nova.
 
 #### Leitura
 
-- **A queda não mudou o redirecionamento.** O p95 no servidor ficou entre 1,4 e 1,6 ms nas três fases. O redirecionamento só lê o Redis, e a gravação do clique roda depois da resposta. Com o Cassandra fora, o driver falha cada gravação na hora (`NoHostAvailable`), sem esperar os 2 s do tempo limite.
-- **O Cassandra deixa de aceitar escritas assim que recebe o sinal de parada.** As falhas começaram aos 30,1 s, quase 6 s antes de o contêiner terminar de parar. Ele fecha a porta CQL na hora, o driver marca o nó como fora do ar, e as gravações seguintes falham sem chegar ao Cassandra. No log da API da execução de teste, as 9.022 falhas são `NoHostAvailable` sem nó tentado. Nas outras duas execuções, de uma a três das primeiras falhas trouxeram `Server is shutting down` ou a conexão fechada pelo Cassandra.
-- **A aplicação ficou 45 s sem gravar:** 30 s com o Cassandra parado e 15 s com ele subindo. Os 0,7 s entre a porta aberta e a volta da gravação vêm da espera de no máximo 2 s do driver entre as tentativas. Com as esperas padrão do driver, que dobram a cada tentativa, a conta, não medida, punha a volta por volta dos 100 s, depois do fim da etapa.
+- **A queda não mudou o redirecionamento.** O p95 no servidor ficou em 1,4 ms com o Cassandra parado e em 1,6 ms antes da parada. Na volta, subiu para 3,3 ms, ainda longe dos 50 ms. O redirecionamento só lê o Redis, e a gravação do clique roda depois da resposta. Com o Cassandra fora, o driver falha cada gravação na hora (`NoHostAvailable`), sem esperar os 2 s do tempo limite.
+- **O Cassandra deixa de aceitar escritas assim que recebe o sinal de parada.** As falhas começaram aos 30,1 s, quase 6 s antes de o contêiner terminar de parar. Ele fecha a porta CQL na hora, o driver marca o nó como fora do ar, e as gravações seguintes falham sem chegar ao Cassandra. Nos logs da API, quase todas as falhas são `NoHostAvailable` sem nó tentado. Em algumas execuções, de uma a três das primeiras trouxeram `Server is shutting down` ou a conexão fechada pelo Cassandra.
+- **A aplicação ficou 45 s sem gravar:** 30 s com o Cassandra parado e 15 s com ele subindo. A gravação voltou 0,5 s depois da porta aberta, dentro dos 2 s de espera máxima entre as tentativas do driver, mais o tempo de concluir a conexão. Com as esperas padrão do driver, que dobram a cada tentativa, a conta, não medida, punha a volta por volta dos 100 s, depois do fim da etapa.
 - **A diferença entre o contador e o histórico foi exatamente o número de falhas** nas duas execuções: nenhuma escrita falhou na aplicação e foi concluída no Cassandra, e nenhum incremento se perdeu.
-- **Primeira execução.** Uma execução anterior, às 01h22, rodou antes de a sondagem da porta ganhar uma thread própria, e as leituras das falhas e do contador travaram por 3 a 4 s de cada vez com o Cassandra parado. Ela também cumpriu o CA-6, com p95 no servidor de 6,5 ms na queda, e teve a mesma forma de volta: porta aberta aos 74,25 s, gravação aos 75,75 s e diferença igual às falhas (9.114). A latência dela já era maior antes da parada (p95 de 5,9 ms de 0 a 30 s), e por isso não veio da queda.
+- **Execuções anteriores.** Às 01h27 e às 01h29, duas execuções com a versão anterior do cenário, uma automática e uma manual, tiveram a mesma forma: tudo com `302`, p95 no servidor de 1,465 e 3,526 ms na queda, gravação de volta aos 75,25 e aos 79,75 s, e diferença igual às falhas. Às 01h22, uma execução saiu com as leituras das falhas e do contador travadas por 3 a 4 s com o Cassandra parado, porque a sondagem da porta ainda ficava na mesma thread. Ela também cumpriu o CA-6, com p95 no servidor de 6,5 ms na queda. A latência dela já era maior antes da parada (p95 de 5,9 ms de 0 a 30 s), e por isso não veio da queda.
 - **Medição de desenvolvimento.** Os números são do computador de desenvolvimento, com outros programas abertos. As 3 execuções que valem para o CA-6 rodam na máquina da apresentação, na execução completa (CA-4).

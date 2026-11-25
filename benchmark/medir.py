@@ -24,6 +24,8 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
+import socket
 import subprocess
 import sys
 import time
@@ -106,6 +108,13 @@ def executar(operacao: str, lado: str, conexoes: int, args: argparse.Namespace) 
 
 PORTA_API = 8001  # própria do cenário, fora da 8000 da demonstração (Q-62)
 PRAZO_API = 60  # s para a API responder depois de subir
+# A API usa os bancos do benchmark no ar, e não o que as variáveis do terminal apontarem (Q-62).
+CONEXOES_DA_API = {
+    "REDIS_MASTER_HOST": "127.0.0.1", "REDIS_MASTER_PORT": "6379",
+    "REDIS_REPLICA_HOST": "127.0.0.1", "REDIS_REPLICA_PORT": "6380",
+    "CASSANDRA_HOST": "127.0.0.1", "CASSANDRA_PORT": "9042", "CASSANDRA_KEYSPACE": "linkpulse",
+    "MONGO_URL": "mongodb://127.0.0.1:27017", "MONGO_DB": "linkpulse",
+}
 
 
 def python_do_venv() -> str:
@@ -117,9 +126,16 @@ def python_do_venv() -> str:
 
 def subir_api(log) -> subprocess.Popen:
     """A API no computador, como na demonstração, pelo envoltório que mede o tempo no servidor (Q-62, Q-63)."""
+    # Sem esta conferência, a espera abaixo aceitaria outro processo que já respondesse na porta.
+    try:
+        socket.create_connection(("127.0.0.1", PORTA_API), timeout=1).close()
+        sys.exit(f"a porta {PORTA_API} já está em uso; encerre o processo que a ocupa e repita")
+    except OSError:
+        pass
     api = subprocess.Popen(
         [python_do_venv(), "-m", "uvicorn", "benchmark.api_cronometrada:app", "--port", str(PORTA_API),
-         "--no-access-log"], cwd=RAIZ, stdout=log, stderr=subprocess.STDOUT)
+         "--no-access-log"], cwd=RAIZ, stdout=log, stderr=subprocess.STDOUT,
+        env={**os.environ, **CONEXOES_DA_API})
     limite = time.monotonic() + PRAZO_API
     while time.monotonic() < limite:
         if api.poll() is not None:
@@ -134,7 +150,9 @@ def subir_api(log) -> subprocess.Popen:
 
 
 def executar_queda(args: argparse.Namespace) -> dict:
-    comando = [*COMPOSE, "run", "--rm", "--no-deps", "--label", f"{ROTULO_AUXILIAR}=medir", "gerador-queda",
+    # Na parada manual, o serviço `gerador`, sem o socket do Docker montado.
+    servico = "gerador" if args.queda_manual else "gerador-queda"
+    comando = [*COMPOSE, "run", "--rm", "--no-deps", "--label", f"{ROTULO_AUXILIAR}=medir", servico,
                "python", "benchmark/queda.py", "--api", f"http://host.docker.internal:{PORTA_API}",
                "--cassandra", conteiner("cassandra")]
     if args.queda_manual:
@@ -168,8 +186,13 @@ def resumo_da_queda(r: dict) -> None:
     print(f"  {q['respostas_302']:,} de {q['envios']:,} envios com 302 · p95 no servidor {q['p95_servidor_ms']} ms · "
           f"p95 no gerador {q['p95_gerador_ms']} ms · contador +{q['contador_somou']} · falhas +{q['falhas_somaram']}")
     print("  marcos (s): " + " · ".join(f"{k.removesuffix('_s')} {v}" for k, v in m.items()))
-    print(f"  conferência: contador +{c['contador']:,} · histórico +{c['historico']:,} · falhas +{c['falhas']:,} · "
-          f"diferença {c['diferenca_contador_historico']:,} (diferença menos falhas: {c['diferenca_menos_falhas']})")
+    if c["historico"] is None:
+        print(f"  conferência: contador +{c['contador']} · falhas +{c['falhas']} · histórico indisponível, "
+              "porque o Cassandra não voltou a tempo")
+    else:
+        print(f"  conferência: contador +{c['contador']:,} · histórico +{c['historico']:,} · falhas +{c['falhas']:,} · "
+              f"diferença {c['diferenca_contador_historico']:,} "
+              f"(diferença menos falhas: {c['diferenca_menos_falhas']})")
     print(f"  CA-6 nesta execução: {'cumprido' if q['ca6'] else 'NÃO cumprido'} · CPU do gerador "
           f"{r['cpu_gerador_nucleos']} núcleos ({r['cpu_gerador_pct']}%)")
 
@@ -264,6 +287,8 @@ def main() -> int:
     parser.add_argument("--queda-manual", action="store_true",
                         help="na queda, não mexe no Docker: avisa a hora de rodar benchmark/queda_manual.py")
     args = parser.parse_args()
+    if set(args.operacoes) == {QUEDA} and "nosql" not in args.lados:
+        parser.error("a queda do Cassandra só tem o lado nosql; nada seria medido")
 
     dados = {"parametros": vars(args), "restauracoes": [], "execucoes": []}
     try:

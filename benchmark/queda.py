@@ -237,19 +237,22 @@ def controlar(docker: Docker | None, conteiner: str, partida: float, marcos: dic
         time.sleep(0.5)
 
 
-def volta_da_gravacao(amostras: list[dict]) -> float | None:
+def volta_da_gravacao(amostras: list[dict], d: Disparo) -> float | None:
     """Última leitura, durante a carga, em que as falhas aumentaram; None se a gravação não voltou na etapa.
 
-    A gravação voltou se, depois dela, a carga seguiu por SEM_FALHA_PARA_VOLTA sem falha nova.
+    A gravação voltou se essa leitura veio depois do religamento e se, depois dela, a carga seguiu por
+    SEM_FALHA_PARA_VOLTA sem falha nova e com respostas `302`, isto é, gerando cliques. Sem a segunda
+    condição, redirecionamentos que deixaram de responder `302` pareceriam a volta do Cassandra.
     """
     durante = [a for a in amostras if a["t"] <= DURACAO and a["falhas"] is not None]
     ultima = None
     for anterior, atual in zip(durante, durante[1:]):
         if atual["falhas"] > anterior["falhas"]:
             ultima = atual["t"]
-    if ultima is None or DURACAO - ultima < SEM_FALHA_PARA_VOLTA:
+    if ultima is None or ultima < RELIGAMENTO or DURACAO - ultima < SEM_FALHA_PARA_VOLTA:
         return None
-    return ultima
+    depois = metricas(d, ultima, ultima + SEM_FALHA_PARA_VOLTA)
+    return ultima if depois["envios"] and depois["respostas_302"] == depois["envios"] else None
 
 
 def leitura_em(amostras: list[dict], t: float, campo: str) -> int | None:
@@ -326,16 +329,16 @@ def cliques_no_historico(codigo: str, desde: datetime, parada: datetime | None) 
         cluster.shutdown()
 
 
-def esperar_cassandra(docker: Docker | None, conteiner: str, marcos: dict, partida: float) -> None:
+def esperar_cassandra(docker: Docker | None, conteiner: str, marcos: dict, partida: float) -> bool:
     """Sem a volta na etapa, espera o Cassandra por até PRAZO_VOLTA, sem carga, para a conferência (Q-66)."""
     limite = time.perf_counter() + PRAZO_VOLTA
     while time.perf_counter() < limite:
         pronto = docker.saude(conteiner) == "healthy" if docker else porta_aberta()
         if pronto:
             marcos.setdefault("saudavel_s", round(time.perf_counter() - partida, 3))
-            return
+            return True
         time.sleep(0.5)
-    raise RuntimeError(f"o Cassandra não voltou em {PRAZO_VOLTA:.0f} s depois da carga")
+    return False
 
 
 def main() -> int:
@@ -351,6 +354,10 @@ def main() -> int:
         print(f"Manifesto inválido em {MANIFESTO}; nada foi medido.")
         return 1
     codigo = manifesto["link_popular"]["short_code"]
+    if datetime.fromisoformat(manifesto["fim"]) > datetime.now(UTC):
+        print(f"A base vai até {manifesto['fim']}, depois de agora: a conferência contaria cliques da base "
+              "como cliques da etapa. Use uma base com --fim no passado; nada foi medido.")
+        return 1
     docker = None if args.queda_manual else Docker()
     if docker is not None and docker.saude(args.cassandra) != "healthy":
         print("O Cassandra não está saudável; nada foi medido.")
@@ -370,9 +377,11 @@ def main() -> int:
           f"{PARADA:.0f} s e volta aos {RELIGAMENTO:.0f} s{' (parada manual)' if docker is None else ''}", flush=True)
     partida = time.perf_counter() + 0.5
     inicio = datetime.now(UTC) + timedelta(seconds=0.5)
-    threading.Thread(target=leituras.rodar, args=(partida,), daemon=True).start()
     sondagens: list[tuple[float, bool]] = []
-    threading.Thread(target=sondar_porta, args=(partida, sondagens, leituras.parar), daemon=True).start()
+    leitoras = [threading.Thread(target=leituras.rodar, args=(partida,), daemon=True),
+                threading.Thread(target=sondar_porta, args=(partida, sondagens, leituras.parar), daemon=True)]
+    for leitora in leitoras:
+        leitora.start()
     controle = threading.Thread(target=controlar, args=(docker, args.cassandra, partida, marcos), daemon=True)
     controle.start()
     time.sleep(max(0.0, partida - time.perf_counter()))
@@ -382,20 +391,29 @@ def main() -> int:
     fim_da_carga = round(relogio_depois - partida, 3)
     print(f"[{fim_da_carga:5.1f} s] fim da carga", flush=True)
 
-    volta = volta_da_gravacao(leituras.amostras)
+    volta = volta_da_gravacao(leituras.amostras, disparo)
+    cassandra_no_ar = True
     if volta is None:
         print("A gravação dos cliques não voltou na etapa; esperando o Cassandra, sem carga", flush=True)
-        esperar_cassandra(docker, args.cassandra, marcos, partida)
+        cassandra_no_ar = esperar_cassandra(docker, args.cassandra, marcos, partida)
+        if not cassandra_no_ar:
+            print(f"O Cassandra não voltou em {PRAZO_VOLTA:.0f} s depois da carga; o resultado sai sem a "
+                  "conferência do histórico", flush=True)
     time.sleep(ESPERA_FINAL)
     controle.join(timeout=PRAZO_VOLTA)
-    depois = leituras.ler(partida)
     leituras.parar.set()
+    for leitora in leitoras:  # a leitura final não pode dividir a conexão com a thread de leitura
+        leitora.join()
+    depois = leituras.ler(partida)
 
     fechada, aberta = transicoes_da_porta(sondagens)
     marcos |= {"porta_fechada_s": fechada, "porta_aberta_s": aberta, "gravacao_voltou_s": volta}
     parada_concluida = marcos.get("parada_concluida_s", fechada)
     instante = lambda t: None if t is None else inicio + timedelta(seconds=t)  # noqa: E731
-    historico, primeiro = cliques_no_historico(codigo, inicio - timedelta(seconds=0.5), instante(parada_concluida))
+    historico, primeiro = None, None
+    if cassandra_no_ar:
+        historico, primeiro = cliques_no_historico(codigo, inicio - timedelta(seconds=0.5),
+                                                   instante(parada_concluida))
     if primeiro is not None:
         marcos["primeiro_clique_gravado_apos_parada_s"] = round((primeiro - inicio).total_seconds(), 3)
 
@@ -412,13 +430,15 @@ def main() -> int:
                     and queda["p95_servidor_ms"] is not None and queda["p95_servidor_ms"] < TETO_P95_MS
                     and (queda["contador_somou"] or 0) > 0 and (queda["falhas_somaram"] or 0) > 0)
 
-    aumento = {campo: depois[campo] - antes[campo] for campo in ("contador", "falhas")}
+    aumento = {campo: None if depois[campo] is None else depois[campo] - antes[campo]
+               for campo in ("contador", "falhas")}
+    diferenca = None if None in (aumento["contador"], historico) else aumento["contador"] - historico
     conferencia = {
         "contador": aumento["contador"],
-        "historico": historico,
+        "historico": historico,  # None: o Cassandra não voltou a tempo da conferência
         "falhas": aumento["falhas"],
-        "diferenca_contador_historico": aumento["contador"] - historico,
-        "diferenca_menos_falhas": aumento["contador"] - historico - aumento["falhas"],
+        "diferenca_contador_historico": diferenca,
+        "diferenca_menos_falhas": None if None in (diferenca, aumento["falhas"]) else diferenca - aumento["falhas"],
     }
     nucleos = (cpu_depois - cpu_antes) / (relogio_depois - relogio_antes)
     resultado = {

@@ -54,7 +54,7 @@ services:
 
   gerador:
     # Gerador de carga: roda benchmark/gerador.py, chamado pelo benchmark/medir.py
-    # com os bancos já no ar (--no-deps). Cota e memória vêm da calibração: um
+    # com os bancos já no ar (--no-deps), e o benchmark/queda.py na parada manual. Cota e memória vêm da calibração: um
     # processo por conexão, com pico de 3,0 GB em 64 (benchmark/README.md).
     build: .
     profiles: ["benchmark"]
@@ -71,16 +71,14 @@ services:
   gerador-queda:
     # Cenário de queda do Cassandra: roda benchmark/queda.py, chamado pelo
     # benchmark/medir.py. É o único serviço com acesso ao Docker, para parar e
-    # religar o Cassandra (ADR-0013, Q-65). Alcança a API, que roda no computador,
-    # por host.docker.internal.
+    # religar o Cassandra (ADR-0013, Q-65). Alcança a API, que roda no computador
+    # e escuta só em 127.0.0.1, pelo host.docker.internal do Docker Desktop.
     build: .
     profiles: ["benchmark"]
     command: ["python", "benchmark/queda.py", "--help"]
     cpus: "2"
     mem_limit: 1g
     memswap_limit: 1g
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     volumes:
       - ./benchmark:/linkpulse/benchmark:ro
       - manifesto-benchmark:/linkpulse/manifesto:ro
