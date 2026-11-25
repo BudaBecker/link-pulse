@@ -249,6 +249,8 @@ O [medir.py](medir.py) roda no computador, como o `base.py`, e pega a mesma trav
 
 As operações que começam no aquecimento são descartadas, e só entram as que começam dentro da janela medida.
 
+**Custo da `serie_recursos`.** A leitura por segundo roda dentro da janela medida e entra nos números. Cada `docker exec` gasta de 14 a 19 ms de CPU no cgroup do banco, cerca de 1,5 a 2% de um núcleo. Em 25/11/2026, com 8 conexões, 5 s de aquecimento e 30 s medidos, em 3 pares alternados com e sem a série, a maior diferença na mediana foi de −2,2% na vazão do redirecionamento no PostgreSQL, com o banco no teto de CPU. No redirecionamento no Redis e no histórico nos dois lados, a diferença ficou entre −1,1% e +1,5%, dentro da variação entre execuções. O custo vale para os dois lados, e a série fica nas execuções oficiais porque as curvas das gravações dependem dela (Q-71, Q-74).
+
 ### Execução de desenvolvimento
 
 Medido em 24/11/2026, antes da calibração, no computador de desenvolvimento (o mesmo das [medições da base](#resultados-medidos)), com o gerador em 4 CPUs e 1 GB, em 4 processos de 2 threads, com 8 conexões, 10 s de aquecimento e 60 s medidos por lado. A base foi restaurada antes do redirecionamento e antes do histórico, com o CA-1 conferido nas duas vezes. As duas linhas do Cassandra são de uma segunda execução, com uma conexão de dados por conexão pedida, também com a base restaurada antes de cada operação. Essas medições de desenvolvimento confirmam que o gerador produz as métricas das quatro operações nos dois lados. A comparação para a apresentação depende da calibração e das repetições na máquina dedicada.
