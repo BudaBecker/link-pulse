@@ -27,7 +27,7 @@ A aplicação roda no computador, fora do Docker, e usa os bancos do [ambiente d
 
 3. Suba a API: `.venv/Scripts/python -m uvicorn app.main:app --port 8000`.
 
-A tela fica em `http://127.0.0.1:8000/`, e a documentação interativa das rotas, em `http://127.0.0.1:8000/docs`. A API conecta ao Cassandra ao subir, então ele precisa estar no ar nesse momento. Depois, uma queda do Cassandra não interrompe os redirecionamentos, e o driver reconecta sozinho quando ele volta. Subir a API durante uma queda fica fora do ambiente controlado da demonstração, em que os bancos sobem com `--wait` antes da API (Q-44).
+A tela fica em `http://127.0.0.1:8000/`, e a documentação interativa das rotas, em `http://127.0.0.1:8000/docs`. A API conecta ao Cassandra ao subir, então ele precisa estar no ar nesse momento. Depois, uma queda do Cassandra não interrompe os redirecionamentos, e o driver reconecta sozinho quando ele volta, com no máximo 2 s entre as tentativas (Q-66). Subir a API durante uma queda fica fora do ambiente controlado da demonstração, em que os bancos sobem com `--wait` antes da API (Q-44).
 
 Por padrão, a aplicação usa estes bancos, que as variáveis de ambiente mudam:
 

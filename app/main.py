@@ -4,6 +4,7 @@ from pathlib import Path
 
 import redis
 from cassandra.cluster import Cluster
+from cassandra.policies import ExponentialReconnectionPolicy
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from pymongo import MongoClient
@@ -18,6 +19,9 @@ from app.router import router
 TEMPO_LIMITE_CLIQUE = 2.0  # segundos (Q-41)
 # No Windows, uma conexão recusada só dá erro depois de cerca de 2 s (Q-61).
 TEMPO_CONEXAO_REPLICA = 0.25  # segundos
+# O padrão do driver espera até 600 s entre as tentativas e desiste depois de 64;
+# com 2 s, a gravação dos cliques volta logo depois do Cassandra (Q-66).
+ESPERA_MAXIMA_RECONEXAO = 2.0  # segundos
 PASTA_ESTATICA = Path(__file__).parent / "static"
 
 
@@ -29,6 +33,7 @@ async def ciclo_de_vida(app: FastAPI):
             [os.environ.get("CASSANDRA_HOST", "127.0.0.1")],
             port=int(os.environ.get("CASSANDRA_PORT", "9042")),
             protocol_version=5,
+            reconnection_policy=ExponentialReconnectionPolicy(1.0, ESPERA_MAXIMA_RECONEXAO, max_attempts=None),
         )
         sessao = cluster.connect(os.environ.get("CASSANDRA_KEYSPACE", "linkpulse"))
         if app.state.cliques is None:

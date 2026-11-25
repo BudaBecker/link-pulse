@@ -11,7 +11,7 @@ Encurtadores genéricos resolvem o redirecionamento, mas não o problema real de
 
 ## Início rápido
 
-Precisa do Docker com o Compose e, para preparar a base e rodar as medições, de Python 3.11 ou mais novo no computador. Os comandos rodam na raiz do repositório.
+Precisa do Docker com o Compose e, para preparar a base e rodar as medições, de Python 3.11 ou mais novo no computador. A queda do Cassandra também precisa do Docker Desktop e do ambiente virtual da aplicação em `.venv` ([app/README.md](app/README.md#como-rodar)), porque o `medir.py` sobe a API com ele. Os comandos rodam na raiz do repositório.
 
 ```sh
 docker compose up -d --wait          # sobe Redis (master e réplica), Cassandra, PostgreSQL e MongoDB
@@ -19,7 +19,7 @@ docker compose run --rm verificar    # confere bancos, esquemas e configuração
 python benchmark/base.py carregar    # carrega a base de referência do benchmark nos dois lados
 ```
 
-A primeira subida leva pouco mais de 1 minuto, quase todo esperando o Cassandra. A carga da base leva cerca de 10 minutos. A base ocupa cerca de 2,8 GB em disco, e a cópia guardada para restaurá-la ocupa outro tanto. O comando `carregar` recria os volumes do benchmark e preserva os dados de desenvolvimento. Depois da primeira carga, use `python benchmark/medir.py` para restaurar a cópia e medir as quatro operações. Para voltar aos dados de desenvolvimento, rode de novo `docker compose up -d --wait`. Passo a passo e problemas comuns no [guia](docs/GUIA.md#como-rodar).
+A primeira subida leva pouco mais de 1 minuto, quase todo esperando o Cassandra. A carga da base leva cerca de 10 minutos. A base ocupa cerca de 2,8 GB em disco, e a cópia guardada para restaurá-la ocupa outro tanto. O comando `carregar` recria os volumes do benchmark e preserva os dados de desenvolvimento. Depois da primeira carga, use `python benchmark/medir.py` para restaurar a cópia e medir a sequência de testes: as quatro operações, o pico de tráfego e a queda do Cassandra. Para voltar aos dados de desenvolvimento, rode de novo `docker compose up -d --wait`. Passo a passo e problemas comuns no [guia](docs/GUIA.md#como-rodar).
 
 ## Guia do projeto
 
@@ -56,7 +56,7 @@ Há dois conjuntos de dados para os mesmos bancos: os volumes de desenvolvimento
 
 ### Como testar e conferir
 
-`docker compose run --rm verificar` confere o ambiente. `python benchmark/base.py conferir` confirma que os dois lados do benchmark têm os mesmos links e cliques, e `--completo` compara também a distribuição de dispositivos e uma assinatura calculada sobre todos os cliques. O gerador já registra a vazão, os tempos de resposta e os erros nos dois lados, a calibração escolheu o número de conexões e o pico de tráfego terminou sem erros no lado NoSQL. Os testes da aplicação já cobrem o cadastro de cliente, a campanha, a criação de link, o redirecionamento, com o contador e a gravação do clique, as consultas de analytics e o painel, e, com `-m quedas`, o redirecionamento com a réplica do Redis e o Cassandra de fato parados; falta o cenário de queda do Cassandra no benchmark. Mais em [Como testar e conferir](docs/GUIA.md#como-testar-e-conferir).
+`docker compose run --rm verificar` confere o ambiente. `python benchmark/base.py conferir` confirma que os dois lados do benchmark têm os mesmos links e cliques, e `--completo` compara também a distribuição de dispositivos e uma assinatura calculada sobre todos os cliques. O gerador já registra a vazão, os tempos de resposta e os erros nos dois lados, a calibração escolheu o número de conexões e o pico de tráfego terminou sem erros no lado NoSQL. Os testes da aplicação já cobrem o cadastro de cliente, a campanha, a criação de link, o redirecionamento, com o contador e a gravação do clique, as consultas de analytics e o painel, e, com `-m quedas`, o redirecionamento com a réplica do Redis e o Cassandra de fato parados. No benchmark, uma execução de teste da queda do Cassandra manteve todos os redirecionamentos com `302` e o p95 no servidor abaixo de 50 ms. Mais em [Como testar e conferir](docs/GUIA.md#como-testar-e-conferir).
 
 ### Como a aplicação funciona
 
@@ -64,9 +64,9 @@ A aplicação já cadastra clientes e campanhas, cria links, redireciona, regist
 
 ### Como analisar os resultados do benchmark
 
-O gerador já compara quatro operações e o pico de tráfego. Ele lê o link e incrementa o contador no Redis, grava e consulta o histórico de cliques no Cassandra e repete as mesmas operações no PostgreSQL. Para cada uma, registra quantas operações terminam com sucesso por segundo, quanto tempo levam e quantas falham. No pico, as três operações de um clique (leitura, contador e registro) rodam ao mesmo tempo no link popular.
+O gerador já compara quatro operações e o pico de tráfego, e mede a queda do Cassandra pela aplicação. Ele lê o link e incrementa o contador no Redis, grava e consulta o histórico de cliques no Cassandra e repete as mesmas operações no PostgreSQL. Para cada uma, registra quantas operações terminam com sucesso por segundo, quanto tempo levam e quantas falham. No pico, as três operações de um clique (leitura, contador e registro) rodam ao mesmo tempo no link popular.
 
-A calibração escolheu 8 conexões, o maior número em que o gerador fica abaixo de 70% da sua cota de CPU. No pico, as três operações do lado NoSQL terminaram sem erros, a meta do cenário ([resultados](benchmark/README.md#pico-de-tráfego)). O cenário de queda do Cassandra e a tela de testes estão planejados. Durante a queda do Cassandra, a meta é continuar redirecionando o usuário e manter o tempo de resposta abaixo de 50 ms em pelo menos 95% dos pedidos. Veja [como interpretar as medições e os limites da comparação](docs/GUIA.md#como-analisar-os-resultados-do-benchmark).
+A calibração escolheu 8 conexões, o maior número em que o gerador fica abaixo de 70% da sua cota de CPU. No pico, as três operações do lado NoSQL terminaram sem erros, a meta do cenário ([resultados](benchmark/README.md#pico-de-tráfego)). Durante a queda do Cassandra, a meta é continuar redirecionando o usuário e manter o tempo de resposta abaixo de 50 ms em pelo menos 95% dos pedidos. Numa execução de teste, todos os redirecionamentos responderam `302`, com p95 de 1,5 ms no servidor, e a aplicação voltou a gravar os cliques 14 s depois de o Cassandra ser religado ([resultados](benchmark/README.md#queda-do-cassandra)). A tela de testes e as 3 execuções da apresentação estão planejadas. Veja [como interpretar as medições e os limites da comparação](docs/GUIA.md#como-analisar-os-resultados-do-benchmark).
 
 ## Documentação
 
