@@ -3,8 +3,8 @@
 Envia 200 redirecionamentos por segundo à API, todos no link popular, numa
 agenda fixa: um envio atrasado nunca é descartado, e a latência do gerador conta
 do instante agendado (Q-64, Q-67). Aos 30 s para o contêiner do Cassandra e aos
-60 s o religa, pela API do Docker (Q-65). A cada 0,25 s lê as falhas de gravação
-em `GET /metricas` e o contador no Redis e, em outra thread, sonda a porta CQL do
+60 s o religa, pela API do Docker (Q-65). A cada 0,25 s lê o contador no Redis e
+as falhas de gravação em `GET /metricas` e, em outra thread, sonda a porta CQL do
 Cassandra. Depois da carga, espera 10 s e conta
 os cliques do link no Cassandra desde o início da etapa.
 
@@ -157,7 +157,7 @@ class Leituras:
         self.endereco = (partes.hostname, partes.port or 80)
         self.redis = redis.Redis(host="redis-master")
         self.chave = f"contador:{codigo}"
-        self.amostras: list[dict] = []  # {t, falhas, contador}
+        self.amostras: list[dict] = []  # {t, falhas, contador, contador_s}
         self.parar = threading.Event()
         self.conexao = None
 
@@ -182,9 +182,14 @@ class Leituras:
             return None
 
     def ler(self, partida: float) -> dict:
+        agora = lambda: round(time.perf_counter() - partida, 3)  # noqa: E731
+        # O contador vem antes, para caber numa janela que termine no fim desta leitura das falhas (Q-69).
+        antes_do_contador = agora()
+        contador = self.contador()
+        contador_s = [antes_do_contador, agora()]
         falhas = self.falhas()
         # O instante é o fim da leitura das falhas: um aumento visto nela pode ter acontecido até ali (Q-68).
-        amostra = {"t": round(time.perf_counter() - partida, 3), "falhas": falhas, "contador": self.contador()}
+        amostra = {"t": agora(), "falhas": falhas, "contador": contador, "contador_s": contador_s}
         self.amostras.append(amostra)
         return amostra
 
@@ -280,16 +285,19 @@ def leitura_em(amostras: list[dict], t: float, campo: str) -> int | None:
 def contador_na_janela(d: Disparo, amostras: list[dict], inicio: float, fim: float) -> tuple[int | None, list]:
     """Aumento do contador entre a primeira e a última leitura válida dentro da janela (Q-69).
 
-    Com as duas leituras dentro da janela, o aumento não inclui incrementos de fora dela. Se os envios entre as
-    bordas e as leituras passam da margem, o aumento não distingue perda de leitura: fica indeterminado (None).
+    Vale só a consulta ao Redis feita inteira dentro da janela, para o aumento não incluir incrementos de fora
+    dela. Se os envios entre as bordas e as leituras passam da margem, o aumento não distingue perda de leitura:
+    fica indeterminado (None).
     """
-    validas = [a for a in amostras if a["contador"] is not None and inicio <= a["t"] <= fim]
+    validas = [a for a in amostras
+               if a["contador"] is not None and inicio <= a["contador_s"][0] and a["contador_s"][1] <= fim]
     if not validas:
         return None, [None, None]
     primeira, ultima = validas[0], validas[-1]
-    sem_leitura = sum(1 for t in d.agendado if inicio <= t < primeira["t"] or ultima["t"] <= t < fim)
+    sem_leitura = sum(1 for t in d.agendado
+                      if inicio <= t < primeira["contador_s"][1] or ultima["contador_s"][0] <= t < fim)
     aumento = ultima["contador"] - primeira["contador"] if sem_leitura <= MARGEM_CONTADOR else None
-    return aumento, [primeira["t"], ultima["t"]]
+    return aumento, [primeira["contador_s"], ultima["contador_s"]]
 
 
 def transicoes_da_porta(sondagens: list[tuple[float, bool]]) -> tuple[float | None, float | None]:
