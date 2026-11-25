@@ -536,6 +536,11 @@ def main() -> int:
         print(f"\nFalhou ({erro.returncode}): {' '.join(erro.cmd)}", file=sys.stderr)
         evento("erro", mensagem=f"falhou ({erro.returncode}): {' '.join(erro.cmd)}")
         return 1
+    except SystemExit as erro:
+        # As recusas da base (bancos parados, volumes de desenvolvimento, trava) saem com uma mensagem.
+        if isinstance(erro.code, str):
+            evento("erro", mensagem=erro.code)
+        raise
     finally:
         gravacao = None
         if concluida and args.completa:

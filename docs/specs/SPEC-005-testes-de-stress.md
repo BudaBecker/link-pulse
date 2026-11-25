@@ -40,7 +40,7 @@ Depois da carga, uma cópia dos volumes de dados do Redis, do Cassandra e do Pos
 - **Ao vivo:** a sequência roda uma vez, em até 480 s, contados do clique no botão ao resultado da queda, com a subida de cada execução. Cada etapa divide o seu tempo por igual entre as execuções que contém. Nas etapas 1 a 4, cada execução tem 3 s de aquecimento descartados e 18 s medidos; no pico, 3 s e 45 s; a queda mantém 90 s e usa a folga das outras etapas para subir a API e conferir (Q-72).
 - **Execução completa:** nas etapas 1 a 5, cada lado roda 60 s depois de 10 s de aquecimento descartados; a curva extra entra nas etapas 2 e 3. A sequência inteira, incluindo a queda do Cassandra, repete 3 vezes (Q-36). Nas etapas 1 a 5, o resultado é a mediana; na queda, as 3 execuções são publicadas e todas precisam cumprir o CA-6. O resultado é gravado em `benchmark/gravacoes/`, no Git (Q-74).
 - **Curva extra:** cada conexão do gerador aplica `synchronous_commit=off` só na sua sessão; a configuração do servidor continua a padrão (Q-73).
-- **Estado dos dados:** a cópia é restaurada antes de cada repetição e antes do histórico por período, a única leitura afetada pelas linhas que o registro de clique acrescenta. A execução ao vivo parte da cópia restaurada e não restaura no meio, porque só ilustra. A restauração dela roda antes do botão, pelo terminal, fora dos 480 s (Q-72).
+- **Estado dos dados:** a cópia é restaurada antes de cada repetição e antes do histórico por período, a única leitura afetada pelas linhas que o registro de clique acrescenta. A execução ao vivo parte da cópia restaurada e não restaura no meio, porque só ilustra. A restauração dela roda antes, num passo próprio, pela tela ou pelo terminal, fora dos 480 s (Q-72, Q-76).
 - **Pico de tráfego:** cada conexão repete as três operações em sequência no link popular, leitura, contador e registro, como um clique no produto; a mistura fica em 1:1:1 nos dois lados, e a latência é medida por operação (Q-39). Na sequência, o pico parte do estado restaurado antes do histórico por período, que não escreve.
 - **Calibração:** antes da primeira execução completa, o gerador testa 8, 32 e 64 conexões e registra o número escolhido e o seu uso de CPU.
 
@@ -59,6 +59,7 @@ Para cada execução: vazão (operações por segundo), latência p50, p95 e p99
 - **Servidor:** a tela tem servidor próprio no benchmark, separado da aplicação, que roda a medição a pedido do botão e repassa os eventos dela à tela; a tela abre com os bancos parados (Q-70).
 - **Curvas:** uma amostra por segundo de vazão e p95, do gerador, e de CPU e memória dos bancos exercitados, com o aquecimento sombreado; no pico, a vazão conta cliques completos (Q-71).
 - **Gravação:** o placar mostra a mediana das repetições, e as curvas, uma repetição por vez (Q-74).
+- **Controle:** a tela controla o benchmark inteiro pelo navegador, um comando por vez: parar os bancos, restaurar, conferir e carregar a base, a sequência ao vivo, a execução completa e a volta ao ambiente de desenvolvimento, com um botão para interromper; usa o mesmo CSS e a mesma paleta da aplicação (Q-76).
 - **Queda:** a tela mostra os `302` e os cliques que falharam por segundo, com a parada, o religamento e a volta da gravação marcados, e um placar da janela do CA-6 e da conferência (Q-75).
 
 ## Plano de implementação
