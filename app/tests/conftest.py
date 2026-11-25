@@ -1,4 +1,5 @@
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -8,13 +9,28 @@ from pymongo import MongoClient
 
 from app.analytics import ConsultasDeCliques
 from app.cliques import RegistroDeCliques
-from app.main import TEMPO_LIMITE_CLIQUE, abrir_redis, criar_app
+from app.main import TEMPO_LIMITE_CLIQUE, abrir_redis, abrir_replica, criar_app
 
 # Banco 15 do Redis e bancos próprios no MongoDB e no Cassandra, para não apagar os dados da demonstração.
 BANCO_REDIS = 15
 BANCO_MONGO = "linkpulse_testes"
 KEYSPACE_CASSANDRA = "linkpulse_testes"
 ESQUEMA_CASSANDRA = Path(__file__).parents[2] / "infra" / "cassandra" / "esquema.cql"
+
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", "quedas: para e religa contêineres do Compose; rode com -m quedas (Q-58)")
+
+
+def pytest_collection_modifyitems(config, items):
+    # Os testes de queda param bancos que a demonstração usa: só rodam quando o -m cita "quedas",
+    # e não com outro filtro, como -m "not slow".
+    if re.search(r"\bquedas\b", config.option.markexpr or ""):
+        return
+    fora = [item for item in items if item.get_closest_marker("quedas")]
+    if fora:
+        config.hook.pytest_deselected(items=fora)
+        items[:] = [item for item in items if not item.get_closest_marker("quedas")]
 
 
 @pytest.fixture
@@ -28,7 +44,7 @@ def master():
 
 @pytest.fixture
 def replica():
-    conexao = abrir_redis("REDIS_MASTER_HOST", "REDIS_REPLICA_PORT", "6380", db=BANCO_REDIS)
+    conexao = abrir_replica(db=BANCO_REDIS)
     yield conexao
     conexao.close()
 
