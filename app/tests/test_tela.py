@@ -147,6 +147,6 @@ def test_tela_funciona_sem_internet():
 
 
 def test_margem_e_intervalo_cabem_no_prazo_do_rnf_03():
-    # A margem cobre a gravação mais lenta; o clique espera a margem e, no pior caso, um ciclo inteiro.
+    # O clique espera a margem e, no pior caso, um ciclo inteiro até aparecer.
     assert margem_da_janela() > TEMPO_LIMITE_CLIQUE
     assert margem_da_janela() + intervalo_de_atualizacao() < PRAZO_RNF_03
