@@ -1,14 +1,6 @@
 const INTERVALO_ATUALIZACAO_MS = 5000;
-const FUSO_BRASILIA = "America/Sao_Paulo";
 const numeros = new Intl.NumberFormat("pt-BR");
 const percentuais = new Intl.NumberFormat("pt-BR", { style: "percent", maximumFractionDigits: 1 });
-const diaBrasilia = new Intl.DateTimeFormat("pt-BR", {
-  timeZone: FUSO_BRASILIA, year: "numeric", month: "2-digit", day: "2-digit",
-});
-const fusoBrasilia = new Intl.DateTimeFormat("pt-BR", {
-  timeZone: FUSO_BRASILIA, timeZoneName: "longOffset",
-});
-const diaCurto = new Intl.DateTimeFormat("pt-BR", { timeZone: "UTC", month: "2-digit", day: "2-digit" });
 const dataBrasilia = new Intl.DateTimeFormat("pt-BR", {
   timeZone: FUSO_BRASILIA, dateStyle: "short", timeStyle: "short",
 });
@@ -23,13 +15,13 @@ const estado = {
   clienteId: "",
   links: null,
   campanhas: null,
-  campanhasPendentes: true,
   codigo: "",
   historico: null,
   falhou: false,
 };
 let consultaAtiva;
 let assinaturaLinks;
+let assinaturaCampanhas;
 let historicoExibido;
 let tempoRetornoCopia;
 
@@ -53,26 +45,6 @@ function criarOpcao(texto, valor) {
   const opcao = criarElemento("option", texto);
   opcao.value = valor;
   return opcao;
-}
-
-function exibirDia(iso) {
-  return diaCurto.format(new Date(`${iso}T12:00:00Z`));
-}
-
-function janelaDosSeteDias(agora = new Date()) {
-  const partes = Object.fromEntries(diaBrasilia.formatToParts(agora).map(({ type, value }) => [type, value]));
-  const hoje = `${partes.year}-${partes.month}-${partes.day}`;
-  const seisDiasAtras = new Date(`${hoje}T12:00:00Z`);
-  // A aritmética em UTC desloca a data civil sem depender do fuso do computador.
-  seisDiasAtras.setUTCDate(seisDiasAtras.getUTCDate() - 6);
-  const primeiroDia = seisDiasAtras.toISOString().slice(0, 10);
-  const deslocamento = (dia) => fusoBrasilia.formatToParts(new Date(`${dia}T12:00:00Z`))
-    .find(({ type }) => type === "timeZoneName").value.slice(3);
-  return {
-    inicio: `${primeiroDia}T00:00:00.000${deslocamento(primeiroDia)}`,
-    fim: `${hoje}T23:59:59.999${deslocamento(hoje)}`,
-    rotulo: `${exibirDia(primeiroDia)} a ${exibirDia(hoje)}`,
-  };
 }
 
 class ErroApi extends Error {
@@ -116,7 +88,6 @@ function definirCliente(id) {
   estado.clienteId = id;
   estado.links = null;
   estado.campanhas = null;
-  estado.campanhasPendentes = true;
   estado.falhou = false;
   definirLink("");
   renderizarOpcoesCampanha();
@@ -131,47 +102,34 @@ function renderizarClientes() {
 }
 
 function renderizarOpcoesCampanha() {
+  const campanhas = estado.campanhas ?? [];
+  const assinatura = JSON.stringify(campanhas.map(({ nome, campanha_id }) => [nome, campanha_id]));
+  // Redesenhar a cada ciclo fecharia o seletor aberto no formulário de link.
+  if (assinatura === assinaturaCampanhas) return;
+  assinaturaCampanhas = assinatura;
   const selecionada = seletorCampanha.value;
-  const opcoes = (estado.campanhas ?? []).map(({ nome, campanha_id }) => criarOpcao(nome, campanha_id));
+  const opcoes = campanhas.map(({ nome, campanha_id }) => criarOpcao(nome, campanha_id));
   seletorCampanha.replaceChildren(criarOpcao("Sem campanha", ""), ...opcoes);
   if (opcoes.some(({ value }) => value === selecionada)) seletorCampanha.value = selecionada;
 }
 
 async function carregarContexto(sinal) {
-  const parametros = { cliente_id: estado.clienteId };
-  const [carregamentoLinks, carregamentoCampanhas] = await Promise.allSettled([
-    requisitar("/links", { parametros, sinal }),
-    estado.campanhasPendentes ? requisitar("/campanhas", { parametros, sinal }) : null,
-  ]);
+  const contexto = await buscarContexto(requisitar, estado.clienteId, sinal);
   sinal.throwIfAborted();
-  if (carregamentoLinks.status === "fulfilled") {
-    estado.links = carregamentoLinks.value;
+  if (contexto.links) {
+    estado.links = contexto.links;
     if (!linkEscolhido()) definirLink(estado.links[0]?.short_code ?? "");
   }
-  if (carregamentoCampanhas.status === "fulfilled" && carregamentoCampanhas.value) {
-    estado.campanhas = carregamentoCampanhas.value;
-    estado.campanhasPendentes = false;
+  if (contexto.campanhas) {
+    estado.campanhas = contexto.campanhas;
     renderizarOpcoesCampanha();
   }
-  return carregamentoLinks.status === "rejected" || carregamentoCampanhas.status === "rejected";
+  return contexto.falhou;
 }
 
 async function carregarHistorico(sinal) {
-  const periodo = janelaDosSeteDias();
-  const { inicio, fim } = periodo;
-  const link = { short_code: estado.codigo, inicio, fim };
-  const cliente = { cliente_id: estado.clienteId, inicio, fim };
-  const [total, porDia, porDispositivo, porCanal] = await Promise.all([
-    requisitar("/analytics/total", { parametros: link, sinal }),
-    requisitar("/analytics/por-dia", { parametros: link, sinal }),
-    requisitar("/analytics/por-dispositivo", { parametros: link, sinal }),
-    requisitar("/analytics/por-canal", { parametros: cliente, sinal }),
-  ]);
-  sinal.throwIfAborted();
-  estado.historico = {
-    periodo, total: total.cliques, dias: porDia.dias, dispositivos: porDispositivo.dispositivos,
-    canais: porCanal.canais, atualizadoEm: new Date(),
-  };
+  const historico = await buscarHistorico(requisitar, estado.codigo, estado.clienteId, sinal);
+  if (historico) estado.historico = historico;
 }
 
 async function atualizar({ forcar = false } = {}) {
@@ -266,7 +224,7 @@ function renderizarVazio() {
 }
 
 function renderizarCampanha(link) {
-  const campanha = estado.campanhas?.find(({ links }) => links.includes(link.short_code));
+  const campanha = campanhaDoLink(estado.campanhas, link.short_code);
   const nome = elemento("nome-campanha");
   const descricao = elemento("descricao-campanha");
   const tags = elemento("tags-campanha");
@@ -588,10 +546,10 @@ function mostrarErroCadastro(formulario, erro) {
     formulario.querySelector("[aria-invalid]")?.focus();
     if (!gerais.length) return;
     mensagem = gerais.join(" ");
-  } else if (erro.status === 422 && erro.detalhe === "campanha_id não existe") {
-    mostrarErroCampo(seletorCampanha, "Esta campanha não existe. Selecione outra ou deixe o campo em branco.");
+  } else if (erro.status === 422 && typeof erro.detalhe === "string" && erro.detalhe.startsWith("campanha_id")) {
+    const motivo = erro.detalhe === "campanha_id é de outro cliente" ? "é de outro cliente" : "não existe";
+    mostrarErroCampo(seletorCampanha, `Esta campanha ${motivo}. Selecione outra ou deixe o campo em branco.`);
     seletorCampanha.focus();
-    estado.campanhasPendentes = true;
     return;
   } else if (erro.status === 503 && formulario.dataset.rota === "links") {
     mensagem = "A criação de links está indisponível no momento. Tente de novo em instantes.";
@@ -631,13 +589,10 @@ function cadastroConcluido(rota, dados, retorno) {
     estado.clientes.sort((primeiro, segundo) => primeiro.nome.localeCompare(segundo.nome, "pt-BR"));
     definirCliente(retorno.cliente_id);
     renderizarClientes();
-  } else if (rota === "campanhas") {
-    estado.campanhasPendentes = true;
-  } else {
+  } else if (rota === "links") {
     const { short_code } = retorno;
     const { url, canal, expira_em } = dados;
     estado.links = [{ short_code, url, canal, expira_em, contador: 0 }, ...(estado.links ?? [])];
-    if (dados.campanha_id) estado.campanhasPendentes = true;
     definirLink(short_code);
   }
   renderizar();
