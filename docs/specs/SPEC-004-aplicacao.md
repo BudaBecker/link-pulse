@@ -39,7 +39,7 @@ Os dados e as chaves estão em [ARQUITETURA](../arquitetura/ARQUITETURA.md) Pass
 
 `POST /links {url, cliente_id, canal?, expira_em?, campanha_id?}`:
 
-1. Rejeita com `422` o pedido sem `url` válida (absoluta, `http` ou `https`, com host) ou sem `cliente_id`, com `expira_em` sem fuso, e o pedido com `campanha_id` que não existe (Q-40). Nada é gravado.
+1. Rejeita com `422` o pedido sem `url` válida (absoluta, `http` ou `https`, com host) ou sem `cliente_id`, com `expira_em` sem fuso, e o pedido com `campanha_id` que não existe (Q-40) ou que é de uma campanha de outro cliente (Q-55). Nada é gravado.
 2. Gera um `short_code` de 7 caracteres em Base62 (letras maiúsculas, minúsculas e dígitos), a partir de uma fonte aleatória.
 3. Grava `link:{short_code}` só se a chave ainda não existir. Em colisão, gera outro código e tenta de novo.
 4. Inclui o `short_code` no Set `links:cliente:{cliente_id}`.
@@ -72,6 +72,7 @@ Os dados e as chaves estão em [ARQUITETURA](../arquitetura/ARQUITETURA.md) Pass
 - A tela da aplicação é uma página HTML servida pela própria aplicação em `GET /`, com os seus arquivos e o Chart.js em `/static/` (Q-54). Ela permite escolher ou cadastrar um cliente, cadastrar campanhas, criar links, e ver o total de cliques, os cliques por dia e por dispositivo de um link e a comparação entre os canais do cliente. Quando o link pertence a uma campanha, a tela mostra a descrição e as tags; ela acha a campanha na lista de `GET /campanhas` cuja lista `links` contém o link (Q-50).
 - A janela da tela é hoje e os 6 dias anteriores, no horário de Brasília: `inicio` à 00:00 de 6 dias atrás e `fim` às 23:59:59.999 de hoje (Q-53). O total da janela vem de `GET /analytics/total`; ao lado, a tela mostra o `contador` do link como cliques desde a criação, que pode ser maior que o histórico (Q-51).
 - A tela refaz as consultas do link e do cliente sozinha a cada 5 s, sem recarregar a página, e mostra a hora da última atualização (Q-52).
+- A tela só publica um conjunto coerente: o total, a soma dos cliques por dia, a soma dos dispositivos e os cliques do link na comparação por canal são iguais. Se não forem, refaz as quatro consultas, até 3 vezes, e, se ainda não baterem, mantém os dados anteriores até o ciclo seguinte (Q-56).
 
 ## Plano de implementação
 
@@ -100,6 +101,6 @@ Stack em [ADR-0013](../decisoes/ADR-0013-stack-e-ambiente-do-marco-2.md).
 - [x] **CA-12** (RF-03, RN-06) — Dado um redirecionamento válido, quando o processamento assíncrono termina, então existe uma linha em `cliques_por_link` com aquele `short_code`, `clicado_em` e `clique_id`; nenhuma operação da aplicação executa `UPDATE` nessa tabela.
 - [x] **CA-13** (RF-04, RNF-07) — Dados N acessos concorrentes a um link válido, quando todos terminam, então `contador:{short_code}` aumentou exatamente N.
 - [ ] **CA-14** (RNF-02, RN-07) — Dado o Cassandra indisponível, quando recebo `GET /r/{short_code}` válido, então a resposta continua `302`, a latência p95 medida no servidor fica abaixo de 50 ms e o contador de falhas aumenta.
-- [x] **CA-15** (RF-05) — Dado um conjunto conhecido de eventos, quando executo as três consultas de analytics, então cada uma retorna exatamente as contagens esperadas.
+- [x] **CA-15** (RF-05) — Dado um conjunto conhecido de eventos, quando executo as consultas por dia, por canal e total, então cada uma retorna exatamente as contagens esperadas.
 - [x] **CA-16** (RNF-06, RNF-05) — A tabela declara `short_code` como partition key e `CLUSTERING ORDER BY (clicado_em DESC, clique_id DESC)`; nenhuma consulta CQL usa `ALLOW FILTERING`; o ambiente declara um master e uma réplica no Redis e um fator de replicação no keyspace.
 - [x] **CA-17** (RF-06, RNF-03) — Dado um link com cliques, quando abro o painel, então vejo o total, os agregados por dia e por dispositivo e a comparação entre os canais do cliente, coerentes com as consultas do CA-15 e com a consulta por dispositivo; um clique novo aparece em até 60 s.
