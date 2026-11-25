@@ -6,7 +6,8 @@ do instante agendado (Q-64, Q-67). Aos 30 s para o contêiner do Cassandra e aos
 60 s o religa, pela API do Docker (Q-65). A cada 0,25 s lê o contador no Redis e
 as falhas de gravação em `GET /metricas` e, em outra thread, sonda a porta CQL do
 Cassandra. Depois da carga, espera 10 s e conta
-os cliques do link no Cassandra desde o início da etapa.
+os cliques do link no Cassandra desde o início da etapa. Durante a carga, cada
+segundo sai numa linha `PARCIAL {json}`, para a tela de testes (Q-75).
 
 Não é chamado à mão: `python benchmark/medir.py --operacoes queda` sobe a API e
 roda este script no contêiner `gerador-queda`. O resultado sai numa linha
@@ -32,7 +33,7 @@ from cassandra import DriverException
 from cassandra.cluster import Cluster, NoHostAvailable
 
 from carregar import MANIFESTO
-from gerador import cpu_usada_s, cpus_do_limite, memoria_pico_mib, percentil
+from gerador import FOLGA_PARCIAL, cpu_usada_s, cpus_do_limite, emitir, memoria_pico_mib, percentil
 from referencia import manifesto_valido
 
 DURACAO = 90.0  # s (ADR-0014)
@@ -124,15 +125,17 @@ class Disparo:
                 conexao.request("GET", self.rota)
                 resposta = conexao.getresponse()
                 resposta.read()
-                self.status[i] = resposta.status
+                # total e servidor antes do status: o PARCIAL lê como respondido quem já tem status.
+                self.total[i] = time.perf_counter() - partida - self.agendado[i]
                 self.servidor[i] = tempo_do_servidor(resposta.getheader("server-timing"))
+                self.status[i] = resposta.status
             except (OSError, http.client.HTTPException) as erro:
+                self.total[i] = time.perf_counter() - partida - self.agendado[i]
                 if conexao is not None:
                     conexao.close()
                 conexao = None
                 if len(self.exemplos_de_erro) < 3:
                     self.exemplos_de_erro.append(f"{type(erro).__name__}: {erro}"[:200])
-            self.total[i] = time.perf_counter() - partida - self.agendado[i]
 
     def rodar(self, partida: float) -> None:
         workers = [threading.Thread(target=self.worker, args=(partida,)) for _ in range(WORKERS)]
@@ -226,7 +229,7 @@ def controlar(docker: Docker | None, conteiner: str, partida: float, marcos: dic
         _controlar(docker, conteiner, partida, marcos)
     except Exception as erro:
         erros.append(f"{type(erro).__name__}: {erro}"[:200])
-        print(f"[{time.perf_counter() - partida:5.1f} s] o controle do Cassandra falhou: {erros[-1]}", flush=True)
+        emitir(f"[{time.perf_counter() - partida:5.1f} s] o controle do Cassandra falhou: {erros[-1]}")
 
 
 def _controlar(docker: Docker | None, conteiner: str, partida: float, marcos: dict) -> None:
@@ -237,23 +240,23 @@ def _controlar(docker: Docker | None, conteiner: str, partida: float, marcos: di
     no_instante(PARADA)
     marcos["parada_pedida_s"] = agora()
     if docker is None:
-        print(f"[{agora():5.1f} s] PARE o Cassandra agora: python benchmark/queda_manual.py parar", flush=True)
+        emitir(f"[{agora():5.1f} s] PARE o Cassandra agora: python benchmark/queda_manual.py parar")
     else:
-        print(f"[{agora():5.1f} s] parando o Cassandra", flush=True)
+        emitir(f"[{agora():5.1f} s] parando o Cassandra")
         docker.parar(conteiner)
         marcos["parada_concluida_s"] = agora()
-        print(f"[{agora():5.1f} s] Cassandra parado", flush=True)
+        emitir(f"[{agora():5.1f} s] Cassandra parado")
     no_instante(RELIGAMENTO)
     marcos["religamento_pedido_s"] = agora()
     if docker is None:
-        print(f"[{agora():5.1f} s] RELIGUE o Cassandra agora: python benchmark/queda_manual.py religar", flush=True)
+        emitir(f"[{agora():5.1f} s] RELIGUE o Cassandra agora: python benchmark/queda_manual.py religar")
         return
     docker.religar(conteiner)
-    print(f"[{agora():5.1f} s] religamento disparado", flush=True)
+    emitir(f"[{agora():5.1f} s] religamento disparado")
     while time.perf_counter() < partida + DURACAO + PRAZO_VOLTA:
         if docker.saude(conteiner) == "healthy":
             marcos["saudavel_s"] = agora()
-            print(f"[{agora():5.1f} s] Cassandra saudável pelo healthcheck", flush=True)
+            emitir(f"[{agora():5.1f} s] Cassandra saudável pelo healthcheck")
             return
         time.sleep(0.5)
 
@@ -333,15 +336,26 @@ def metricas(d: Disparo, inicio: float, fim: float) -> dict:
     }
 
 
-def serie(d: Disparo, amostras: list[dict]) -> list[dict]:
-    linhas = []
+def linha_da_serie(d: Disparo, amostras: list[dict], s: int, antes: dict) -> dict:
+    m = metricas(d, float(s), float(s + 1))
+    falhas, contador = leitura_em(amostras, s + 1, "falhas"), leitura_em(amostras, s + 1, "contador")
+    return {"s": s, "envios": m["envios"], "respostas_302": m["respostas_302"],
+            "p95_servidor_ms": m["p95_servidor_ms"], "p95_gerador_ms": m["p95_gerador_ms"],
+            "falhas": falhas, "contador": contador,
+            # Aumentos desde a leitura de antes da carga, para a tela não depender do valor inicial.
+            "falhas_na_etapa": None if falhas is None else falhas - antes["falhas"],
+            "contador_na_etapa": None if contador is None else contador - antes["contador"]}
+
+
+def serie(d: Disparo, amostras: list[dict], antes: dict) -> list[dict]:
+    return [linha_da_serie(d, amostras, s, antes) for s in range(int(DURACAO))]
+
+
+def relatar(d: Disparo, amostras: list[dict], antes: dict, partida: float) -> None:
+    """Um `PARCIAL` por segundo, logo depois de ele terminar; a série final é recalculada no fim."""
     for s in range(int(DURACAO)):
-        m = metricas(d, float(s), float(s + 1))
-        linhas.append({"s": s, "envios": m["envios"], "respostas_302": m["respostas_302"],
-                       "p95_servidor_ms": m["p95_servidor_ms"], "p95_gerador_ms": m["p95_gerador_ms"],
-                       "falhas": leitura_em(amostras, s + 1, "falhas"),
-                       "contador": leitura_em(amostras, s + 1, "contador")})
-    return linhas
+        time.sleep(max(0.0, partida + s + 1 + FOLGA_PARCIAL - time.perf_counter()))
+        emitir("PARCIAL " + json.dumps(linha_da_serie(d, amostras, s, antes)))
 
 
 def cliques_no_historico(codigo: str, desde: datetime, parada: datetime | None) -> tuple[int, datetime | None]:
@@ -389,52 +403,55 @@ def main() -> int:
 
     manifesto = json.loads(MANIFESTO.read_text(encoding="utf-8"))
     if not manifesto_valido(manifesto):
-        print(f"Manifesto inválido em {MANIFESTO}; nada foi medido.")
+        emitir(f"Manifesto inválido em {MANIFESTO}; nada foi medido.")
         return 1
     codigo = manifesto["link_popular"]["short_code"]
     if datetime.fromisoformat(manifesto["fim"]) > datetime.now(UTC):
-        print(f"A base vai até {manifesto['fim']}, depois de agora: a conferência contaria cliques da base "
+        emitir(f"A base vai até {manifesto['fim']}, depois de agora: a conferência contaria cliques da base "
               "como cliques da etapa. Use uma base com --fim no passado; nada foi medido.")
         return 1
     docker = None if args.queda_manual else Docker()
     if docker is not None and docker.saude(args.cassandra) != "healthy":
-        print("O Cassandra não está saudável; nada foi medido.")
+        emitir("O Cassandra não está saudável; nada foi medido.")
         return 1
 
     disparo = Disparo(args.api, codigo, int(DURACAO * TAXA))
     leituras = Leituras(args.api, codigo)
     antes = leituras.ler(time.perf_counter())
     if antes["falhas"] is None or antes["contador"] is None:
-        print(f"A API em {args.api} ou o Redis não responderam; nada foi medido.")
+        emitir(f"A API em {args.api} ou o Redis não responderam; nada foi medido.")
         return 1
     leituras.amostras.clear()
 
     marcos: dict = {}
     erros_no_controle: list[str] = []
     limite_cpu = cpus_do_limite()
-    print(f"queda: {TAXA} redirecionamentos por segundo em {codigo}, {DURACAO:.0f} s; o Cassandra para aos "
-          f"{PARADA:.0f} s e volta aos {RELIGAMENTO:.0f} s{' (parada manual)' if docker is None else ''}", flush=True)
+    emitir(f"queda: {TAXA} redirecionamentos por segundo em {codigo}, {DURACAO:.0f} s; o Cassandra para aos "
+          f"{PARADA:.0f} s e volta aos {RELIGAMENTO:.0f} s{' (parada manual)' if docker is None else ''}")
     partida = time.perf_counter() + 0.5
     inicio = datetime.now(UTC) + timedelta(seconds=0.5)
     sondagens: list[tuple[float, bool]] = []
     leitoras = [threading.Thread(target=leituras.rodar, args=(partida,), daemon=True),
                 threading.Thread(target=sondar_porta, args=(partida, sondagens, leituras.parar), daemon=True)]
+    relator = threading.Thread(target=relatar, args=(disparo, leituras.amostras, antes, partida), daemon=True)
     for leitora in leitoras:
         leitora.start()
     controle = threading.Thread(target=controlar, args=(docker, args.cassandra, partida, marcos, erros_no_controle),
                                 daemon=True)
     controle.start()
+    relator.start()
     time.sleep(max(0.0, partida - time.perf_counter()))
     cpu_antes, relogio_antes = cpu_usada_s(), time.perf_counter()
     disparo.rodar(partida)
     cpu_depois, relogio_depois = cpu_usada_s(), time.perf_counter()
     fim_da_carga = round(relogio_depois - partida, 3)
-    print(f"[{fim_da_carga:5.1f} s] fim da carga", flush=True)
+    emitir(f"[{fim_da_carga:5.1f} s] fim da carga")
 
+    relator.join(timeout=5)
     cassandra_no_ar = esperar_cassandra(docker, args.cassandra, marcos, partida)
     if not cassandra_no_ar:
-        print(f"O Cassandra não voltou em {PRAZO_VOLTA:.0f} s depois da carga; o resultado sai sem a "
-              "conferência do histórico", flush=True)
+        emitir(f"O Cassandra não voltou em {PRAZO_VOLTA:.0f} s depois da carga; o resultado sai sem a "
+              "conferência do histórico")
     time.sleep(ESPERA_FINAL)
     controle.join(timeout=PRAZO_VOLTA)
     leituras.parar.set()
@@ -454,8 +471,8 @@ def main() -> int:
                                                        instante(parada_concluida))
         except (DriverException, NoHostAvailable) as erro:
             erro_na_conferencia = f"{type(erro).__name__}: {erro}"[:200]
-            print(f"A consulta ao Cassandra falhou ({erro_na_conferencia}); o resultado sai sem a conferência "
-                  "do histórico e sem a volta da gravação", flush=True)
+            emitir(f"A consulta ao Cassandra falhou ({erro_na_conferencia}); o resultado sai sem a conferência "
+                  "do histórico e sem a volta da gravação")
     primeiro_s = None if primeiro is None else round((primeiro - inicio).total_seconds(), 3)
     marcos["primeiro_clique_gravado_apos_parada_s"] = primeiro_s
     # A volta é o primeiro clique gravado depois da parada, dentro da carga; sem ele, a janela vai até o fim.
@@ -466,7 +483,7 @@ def main() -> int:
     # Sem o histórico consultado, não se sabe se a gravação voltou; a janela fica nos 90 s.
     consultado = historico is not None
     if volta is None and consultado:
-        print("A gravação dos cliques não voltou na etapa", flush=True)
+        emitir("A gravação dos cliques não voltou na etapa")
 
     fim_da_queda = DURACAO if volta is None else max(volta, ultima or volta)
     queda = metricas(disparo, PARADA, fim_da_queda)
@@ -516,14 +533,14 @@ def main() -> int:
         "fases": {nome: metricas(disparo, *janela) for nome, janela in FASES.items()},
         "queda": queda,
         "conferencia": conferencia,
-        "serie": serie(disparo, leituras.amostras),
+        "serie": serie(disparo, leituras.amostras, antes),
         "exemplos_de_erro": disparo.exemplos_de_erro,
         "cpu_gerador_nucleos": round(nucleos, 2),
         "cpu_gerador_pct": round(100 * nucleos / limite_cpu, 1),
         "limite_cpu_gerador": limite_cpu,
         "memoria_pico_gerador_mib": memoria_pico_mib(),
     }
-    print("RESULTADO " + json.dumps(resultado, ensure_ascii=False), flush=True)
+    emitir("RESULTADO " + json.dumps(resultado, ensure_ascii=False))
     return 0
 
 

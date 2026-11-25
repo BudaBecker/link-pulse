@@ -38,8 +38,8 @@ Os critérios de aceitação são numerados dentro de cada spec: "CA-1 da SPEC-0
 | Base de referência do benchmark | Passo 1 da [SPEC-005](specs/SPEC-005-testes-de-stress.md#plano-de-implementação) (RM-29) | [benchmark/](../benchmark/README.md), [docker-compose.benchmark.yml](../docker-compose.benchmark.yml) |
 | Aplicação | Passos 2 a 6 da SPEC-004 (RM-30) | Cadastro de cliente, campanha e criação de link (passo 2, RM-36), redirecionamento, contador e gravação assíncrona do clique (passo 3, RM-37) consultas de analytics (passo 4, RM-38), tela (passo 5, RM-39) e testes de aceitação com a réplica e o Cassandra parados (passo 6, RM-40) em [app/](../app/README.md) |
 | Gerador de carga, calibração e cenários | Passos 2 a 5 da SPEC-005 (RM-31) | Gerador em laço fechado das quatro operações em [benchmark/](../benchmark/README.md#gerador-de-carga) (RM-41), [calibração](../benchmark/README.md#calibração), que escolheu 8 conexões (RM-42), [pico de tráfego](../benchmark/README.md#pico-de-tráfego) (RM-43) e [queda do Cassandra](../benchmark/README.md#queda-do-cassandra), pela aplicação, em laço aberto (RM-44) |
-| Tela de testes | Passo 6 da SPEC-005 (RM-32) | Planejada |
-| Execuções completas, com o resultado salvo | Passo 7 da SPEC-005 (RM-33) | Planejadas |
+| Tela de testes | Passo 6 da SPEC-005 (RM-32) | [Tela de testes](../benchmark/README.md#tela-de-testes), aberta com `python benchmark/tela.py`: controla o benchmark pelo navegador (parar os bancos, restaurar a base, sequência ao vivo, execução completa, volta ao desenvolvimento) e mostra curvas, placar e execuções gravadas |
+| Execuções completas, com o resultado salvo | Passo 7 da SPEC-005 (RM-33) | O comando `python benchmark/medir.py --completa` grava a [execução completa](../benchmark/README.md#execução-completa); as execuções oficiais, na máquina da apresentação, estão planejadas |
 
 O andamento de cada tarefa fica na issue indicada no [ROADMAP](roadmap/ROADMAP.md).
 
@@ -139,7 +139,7 @@ O cadastro de cliente, a campanha, a criação de link, o redirecionamento, com 
 
 ## Como analisar os resultados do benchmark
 
-O gerador de carga já mede as quatro operações, o pico de tráfego (RM-43) e a queda do Cassandra (RM-44), e a calibração escolheu 8 conexões (RM-42). A tela de testes e as execuções completas ainda não foram implementadas (RM-32 e RM-33). Os números em [benchmark/README.md](../benchmark/README.md#gerador-de-carga) vêm do computador de desenvolvimento e não valem para a apresentação; a calibração precisa ser repetida na máquina da apresentação.
+O gerador de carga já mede as quatro operações, o pico de tráfego (RM-43) e a queda do Cassandra (RM-44), e a calibração escolheu 8 conexões (RM-42). A [tela de testes](../benchmark/README.md#tela-de-testes) roda a sequência ao vivo e abre as execuções completas gravadas (RM-32); as execuções oficiais ainda não rodaram (RM-33). Os números em [benchmark/README.md](../benchmark/README.md#gerador-de-carga) vêm do computador de desenvolvimento e não valem para a apresentação; a calibração precisa ser repetida na máquina da apresentação.
 
 ### O que é comparado
 

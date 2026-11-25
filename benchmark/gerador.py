@@ -7,11 +7,13 @@ popular (Q-39). As conexões se
 dividem entre processos, por padrão um por conexão, com uma thread por
 conexão. Os comandos são
 preparados no Cassandra e no PostgreSQL; o Redis não tem comando preparado.
+Com --curva-extra, o PostgreSQL roda com synchronous_commit=off na sessão (Q-73).
 
 Não é chamado à mão: `python benchmark/medir.py` roda este script no contêiner
 `gerador`. O resultado sai numa linha `RESULTADO {json}`; as linhas
 `JANELA inicio` e `JANELA fim` marcam a janela medida, para o medir.py ler a
-CPU do banco no mesmo intervalo.
+CPU do banco no mesmo intervalo. `PARTIDA` marca o início da carga, e cada
+`PARCIAL {json}`, um segundo dela, para as curvas da tela de testes (Q-71).
 """
 
 from __future__ import annotations
@@ -26,6 +28,7 @@ import sys
 import threading
 import time
 from array import array
+from collections import defaultdict
 from datetime import UTC, datetime
 from multiprocessing import get_context
 from threading import BrokenBarrierError
@@ -48,6 +51,8 @@ SORTEIO_POPULAR = 0.20  # parcela das chamadas que cai no link popular (ADR-0014
 LIMITE_HISTORICO = 1000
 COLUNAS_CLIQUE = "short_code, clicado_em, clique_id, pais, dispositivo, referrer"
 CGROUP = Path("/sys/fs/cgroup")
+FOLGA_PARCIAL = 0.25  # s depois do fim de cada segundo para juntar as operações concluídas nele
+_SAIDA = threading.Lock()
 
 SQL = {
     "redirecionamento": "SELECT url, cliente_id, canal, criado_em, expira_em FROM links WHERE short_code = %s",
@@ -68,6 +73,13 @@ CQL = {
 }
 
 
+def emitir(linha: str) -> None:
+    """Uma linha inteira por vez: as parciais saem de outra thread que não a da janela medida."""
+    with _SAIDA:
+        sys.stdout.write(linha + "\n")
+        sys.stdout.flush()
+
+
 def novo_clique(codigo: str, rng) -> tuple:
     agora = datetime.now(UTC)
     dispositivo = rng.choices([d for d, _ in DISPOSITIVOS], [p for _, p in DISPOSITIVOS])[0]
@@ -75,7 +87,7 @@ def novo_clique(codigo: str, rng) -> tuple:
     return (codigo, agora, uuid_from_time(agora), None, dispositivo, referrer)
 
 
-def preparar(etapa: str, lado: str, janela: tuple[datetime, datetime]):
+def preparar(etapa: str, lado: str, janela: tuple[datetime, datetime], curva_extra: bool = False):
     """Devolve `conectar()`, que abre uma conexão e devolve {operação: executar(codigo, rng) -> bool}.
 
     `executar` devolve False quando o banco responde sem o dado esperado (link
@@ -86,7 +98,7 @@ def preparar(etapa: str, lado: str, janela: tuple[datetime, datetime]):
 
     def conectar():
         if lado == "postgres":
-            return conectar_postgres(operacoes, janela)
+            return conectar_postgres(operacoes, janela, curva_extra)
         executores = {}
         if {"redirecionamento", "contador"} & set(operacoes):
             conexao = redis.Redis(host="redis-master", single_connection_client=True)
@@ -110,12 +122,17 @@ def preparar(etapa: str, lado: str, janela: tuple[datetime, datetime]):
     return conectar
 
 
-def conectar_postgres(operacoes: tuple[str, ...], janela) -> dict:
+def conectar_postgres(operacoes: tuple[str, ...], janela, curva_extra: bool = False) -> dict:
     conexao = psycopg.connect(
         host="postgres", user="linkpulse", dbname="linkpulse", autocommit=True,
         password=os.environ.get("POSTGRES_PASSWORD", "linkpulse"),
     )
     cursor = conexao.cursor()
+    if curva_extra:
+        # Só nesta sessão: a configuração do servidor continua a padrão (ADR-0014, Q-73).
+        cursor.execute("SET synchronous_commit = off")
+        if cursor.execute("SHOW synchronous_commit").fetchone()[0] != "off":
+            raise RuntimeError("o PostgreSQL não aceitou synchronous_commit=off na sessão")
     executores = {
         "redirecionamento": lambda codigo, rng: cursor.execute(
             SQL["redirecionamento"], (codigo,), prepare=True).fetchone() is not None,
@@ -128,21 +145,29 @@ def conectar_postgres(operacoes: tuple[str, ...], janela) -> dict:
     return {o: executores[o] for o in operacoes}
 
 
+def segundos_da_carga(args: argparse.Namespace) -> int:
+    """Segundos com PARCIAL; calculado pelos argumentos, e não por `marcos`, para filhos e juntador concordarem."""
+    return math.ceil(args.aquecimento + args.duracao)
+
+
 def processo(numero: int, conexoes: int, args: argparse.Namespace, popular: str, outros: list[str],
-             janela, prontos, partida, marcos, saida) -> None:
+             janela, prontos, partida, marcos, saida, parciais) -> None:
     try:
-        conectar = preparar(args.operacao, args.lado, janela)
+        conectar = preparar(args.operacao, args.lado, janela, args.curva_extra)
         conexoes_abertas = [conectar() for _ in range(conexoes)]
     except BaseException:
         prontos.abort()  # o processo principal desiste em vez de esperar este
         raise
     resultados = [None] * conexoes
+    # Por conexão: segundo desde a partida -> {operação: (latências, [erros])}, pela hora de conclusão.
+    segundos = [defaultdict(dict) for _ in range(conexoes)]
 
     def conexao(indice: int) -> None:
         executores = conexoes_abertas[indice]
         rng = random.Random(f"{args.operacao}:{args.lado}:{numero}:{indice}")
-        inicio_medida, fim = marcos[0], marcos[1]
+        inicio_medida, fim, origem = marcos[0], marcos[1], marcos[2]
         medidas = {o: (array("d"), [0], []) for o in executores}  # latências, erros, exemplos
+        por_segundo = segundos[indice]
         pico = args.operacao == PICO
         while True:
             # No pico, todas as chamadas vão ao link popular.
@@ -159,7 +184,13 @@ def processo(numero: int, conexoes: int, args: argparse.Namespace, popular: str,
                     exemplos = medidas[operacao][2]
                     if len(exemplos) < 3:
                         exemplos.append(f"{type(erro).__name__}: {erro}"[:200])
-                duracao = time.perf_counter() - t0
+                t1 = time.perf_counter()
+                duracao = t1 - t0
+                parcial = por_segundo[int(t1 - origem)].setdefault(operacao, (array("d"), [0]))
+                if ok:
+                    parcial[0].append(duracao)
+                else:
+                    parcial[1][0] += 1
                 if t0 < inicio_medida:
                     continue  # aquecimento descartado
                 if ok:
@@ -167,12 +198,26 @@ def processo(numero: int, conexoes: int, args: argparse.Namespace, popular: str,
                 else:
                     medidas[operacao][1][0] += 1
 
+    def relatar() -> None:
+        """A cada segundo, junta o que as conexões concluíram nele e manda ao processo principal."""
+        origem = marcos[2]
+        for s in range(segundos_da_carga(args)):
+            time.sleep(max(0.0, origem + s + 1 + FOLGA_PARCIAL - time.perf_counter()))
+            junto: dict = {}
+            for por_segundo in segundos:
+                for operacao, (latencias, erros) in por_segundo.pop(s, {}).items():
+                    soma = junto.setdefault(operacao, (array("d"), [0]))
+                    soma[0].extend(latencias)
+                    soma[1][0] += erros[0]
+            parciais.put((s, {o: (latencias, erros[0]) for o, (latencias, erros) in junto.items()}))
+
     try:
         prontos.wait()
     except BrokenBarrierError:
         return
     partida.wait()
     threads = [threading.Thread(target=conexao, args=(i,)) for i in range(conexoes)]
+    threads.append(threading.Thread(target=relatar))
     for t in threads:
         t.start()
     for t in threads:
@@ -234,8 +279,32 @@ def estatisticas(latencias, erros: int, exemplos: list[str], duracao: float) -> 
     }
 
 
+def juntar_parciais(parciais, processos: int, operacoes: tuple[str, ...], segundos: int, serie: list) -> None:
+    """Emite um `PARCIAL` por segundo, quando todos os processos entregaram aquele segundo."""
+    recebidos: dict[int, list] = {}
+    for _ in range(processos * segundos):
+        try:
+            s, parte = parciais.get(timeout=FOLGA_PARCIAL + 30)
+        except queue.Empty:
+            return  # o resultado final não depende das parciais
+        recebidos.setdefault(s, []).append(parte)
+        if len(recebidos[s]) < processos:
+            continue
+        partes = recebidos.pop(s)
+        por_operacao = {}
+        for operacao in operacoes:
+            latencias = sorted(x for p in partes if operacao in p for x in p[operacao][0])
+            p95 = percentil(latencias, 95)
+            por_operacao[operacao] = {"ops": len(latencias), "erros": sum(p[operacao][1] for p in partes
+                                                                           if operacao in p),
+                                      "p95_ms": None if p95 is None else round(p95 * 1000, 3)}
+        linha = {"s": s, "por_operacao": por_operacao}
+        serie.append(linha)
+        emitir("PARCIAL " + json.dumps(linha))
+
+
 def encerrar(filhos, motivo: str) -> int:
-    print(f"Medição interrompida: {motivo}", flush=True)
+    emitir(f"Medição interrompida: {motivo}")
     for filho in filhos:
         filho.terminate()
     for filho in filhos:
@@ -251,7 +320,11 @@ def main() -> int:
     parser.add_argument("--duracao", type=float, default=60)
     parser.add_argument("--aquecimento", type=float, default=10)
     parser.add_argument("--processos", type=int, help="padrão: um por conexão")
+    parser.add_argument("--curva-extra", action="store_true",
+                        help="PostgreSQL com synchronous_commit=off na sessão, fora do padrão (ADR-0014)")
     args = parser.parse_args()
+    if args.curva_extra and (args.lado != "postgres" or args.operacao not in ("contador", "registro")):
+        parser.error("a curva extra só existe no PostgreSQL, no contador e no registro de clique")
 
     manifesto = json.loads(MANIFESTO.read_text(encoding="utf-8"))
     if not manifesto_valido(manifesto):
@@ -269,8 +342,10 @@ def main() -> int:
     ctx = get_context("spawn")
     prontos, partida = ctx.Barrier(processos + 1), ctx.Event()
     # perf_counter usa o relógio monotônico do sistema, o mesmo em todos os processos.
-    marcos, saida = ctx.Array("d", 2), ctx.Queue()
-    filhos = [ctx.Process(target=processo, args=(i, n, args, popular, outros, janela, prontos, partida, marcos, saida))
+    # marcos: início da janela medida, fim dela e partida da carga.
+    marcos, saida, parciais = ctx.Array("d", 3), ctx.Queue(), ctx.Queue()
+    filhos = [ctx.Process(target=processo,
+                          args=(i, n, args, popular, outros, janela, prontos, partida, marcos, saida, parciais))
               for i, n in enumerate(divisao)]
     for filho in filhos:
         filho.start()
@@ -280,18 +355,24 @@ def main() -> int:
         prontos.abort()
         return encerrar(filhos, "um processo não conseguiu abrir as conexões")
     agora = time.perf_counter()
-    marcos[0], marcos[1] = agora + args.aquecimento, agora + args.aquecimento + args.duracao
+    marcos[0], marcos[1], marcos[2] = agora + args.aquecimento, agora + args.aquecimento + args.duracao, agora
     inicio = datetime.now(UTC)
+    serie: list[dict] = []
+    juntador = threading.Thread(target=juntar_parciais, daemon=True, args=(
+        parciais, processos, CICLO[args.operacao], segundos_da_carga(args), serie))
+    juntador.start()
     partida.set()
-    print(f"{args.operacao} / {args.lado}: {args.conexoes} conexões em {processos} processos, "
-          f"{args.aquecimento:.0f} s de aquecimento e {args.duracao:.0f} s medidos", flush=True)
+    emitir("PARTIDA")
+    extra = ", synchronous_commit=off" if args.curva_extra else ""
+    emitir(f"{args.operacao} / {args.lado}{extra}: {args.conexoes} conexões em {processos} processos, "
+           f"{args.aquecimento:.0f} s de aquecimento e {args.duracao:.0f} s medidos")
 
     time.sleep(max(0.0, marcos[0] - time.perf_counter()))
     cpu_antes, relogio_antes = cpu_usada_s(), time.perf_counter()
-    print("JANELA inicio", flush=True)
+    emitir("JANELA inicio")
     time.sleep(max(0.0, marcos[1] - time.perf_counter()))
     cpu_depois, relogio_depois = cpu_usada_s(), time.perf_counter()
-    print("JANELA fim", flush=True)
+    emitir("JANELA fim")
 
     juntas = {o: (array("d"), 0, []) for o in CICLO[args.operacao]}
     for _ in filhos:
@@ -305,12 +386,14 @@ def main() -> int:
             juntas[operacao] = (soma[0], soma[1] + erros, soma[2] + exemplos)
     for filho in filhos:
         filho.join()
+    juntador.join(timeout=FOLGA_PARCIAL + 5)
 
     nucleos = (cpu_depois - cpu_antes) / (relogio_depois - relogio_antes)
     por_operacao = {o: estatisticas(*juntas[o], args.duracao) for o in CICLO[args.operacao]}
     resultado = {
         "operacao": args.operacao,
         "lado": args.lado,
+        "curva_extra": args.curva_extra,
         "inicio": inicio.isoformat(timespec="seconds"),
         "conexoes": args.conexoes,
         "processos": processos,
@@ -323,8 +406,9 @@ def main() -> int:
         "cpu_gerador_pct_exato": 100 * nucleos / limite_cpu,  # comparado com os 70% sem arredondar
         "limite_cpu_gerador": limite_cpu,
         "memoria_pico_gerador_mib": memoria_pico_mib(),
+        "serie": sorted(serie, key=lambda linha: linha["s"]),  # um segundo por linha, desde a partida
     }
-    print("RESULTADO " + json.dumps(resultado, ensure_ascii=False), flush=True)
+    emitir("RESULTADO " + json.dumps(resultado, ensure_ascii=False))
     return 0
 
 

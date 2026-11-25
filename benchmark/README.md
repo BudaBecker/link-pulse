@@ -1,6 +1,6 @@
 # Benchmark do LinkPulse
 
-O benchmark do LinkPulse compara as mesmas operações no lado NoSQL (Redis e Cassandra) e no PostgreSQL, e a comparação só vale se os dois lados tiverem exatamente os mesmos dados. Esta pasta carrega esses dados, sempre iguais para a mesma semente, nos dois lados: clientes, links e cliques. Depois guarda uma cópia dos volumes dos bancos, para voltar a esse estado antes de cada repetição das medições. A pasta também tem o [gerador de carga](#gerador-de-carga), que mede as quatro operações sobre essa base, e o cenário de [queda do Cassandra](#queda-do-cassandra). A base é o passo 1 do plano dos testes de stress ([SPEC-005](../docs/specs/SPEC-005-testes-de-stress.md#plano-de-implementação)), na tarefa de carregar os dados de referência nos dois lados (RM-29). Os dados seguem o modelo e o método do benchmark ([ADR-0014](../docs/decisoes/ADR-0014-modelo-de-dados-e-metodo-do-benchmark.md#dados-e-durações)).
+O benchmark do LinkPulse compara as mesmas operações no lado NoSQL (Redis e Cassandra) e no PostgreSQL, e a comparação só vale se os dois lados tiverem exatamente os mesmos dados. Esta pasta carrega esses dados, sempre iguais para a mesma semente, nos dois lados: clientes, links e cliques. Depois guarda uma cópia dos volumes dos bancos, para voltar a esse estado antes de cada repetição das medições. A pasta também tem o [gerador de carga](#gerador-de-carga), que mede as quatro operações sobre essa base, o cenário de [queda do Cassandra](#queda-do-cassandra), a [tela de testes](#tela-de-testes) e as [execuções completas](#execução-completa). A base é o passo 1 do plano dos testes de stress ([SPEC-005](../docs/specs/SPEC-005-testes-de-stress.md#plano-de-implementação)), na tarefa de carregar os dados de referência nos dois lados (RM-29). Os dados seguem o modelo e o método do benchmark ([ADR-0014](../docs/decisoes/ADR-0014-modelo-de-dados-e-metodo-do-benchmark.md#dados-e-durações)).
 
 ## Como usar
 
@@ -197,7 +197,7 @@ Dispositivos, nos dois lados e lidos linha a linha: 6.000.000 `mobile` (60%), 3.
 
 ## Gerador de carga
 
-O gerador mede as quatro operações do produto nos dois lados, em laço fechado: um número fixo de conexões, e cada uma só envia a próxima operação quando a anterior responde ([ADR-0014](../docs/decisoes/ADR-0014-modelo-de-dados-e-metodo-do-benchmark.md#como-a-carga-é-aplicada)). O gerador mede a leitura do link, o incremento do contador, a gravação de clique, a consulta ao histórico e o [pico de tráfego](#pico-de-tráfego), as etapas 1 a 5 da sequência de testes. A [calibração](#calibração) escolheu o número de conexões. A [queda do Cassandra](#queda-do-cassandra), a etapa 6, passa pela aplicação, em laço aberto. A tela de resultados é a próxima entrega do [plano de testes](../docs/specs/SPEC-005-testes-de-stress.md#plano-de-implementação).
+O gerador mede as quatro operações do produto nos dois lados, em laço fechado: um número fixo de conexões, e cada uma só envia a próxima operação quando a anterior responde ([ADR-0014](../docs/decisoes/ADR-0014-modelo-de-dados-e-metodo-do-benchmark.md#como-a-carga-é-aplicada)). O gerador mede a leitura do link, o incremento do contador, a gravação de clique, a consulta ao histórico e o [pico de tráfego](#pico-de-tráfego), as etapas 1 a 5 da sequência de testes. A [calibração](#calibração) escolheu o número de conexões. A [queda do Cassandra](#queda-do-cassandra), a etapa 6, passa pela aplicação, em laço aberto. A [tela de testes](#tela-de-testes) roda a sequência ao vivo e abre as [execuções completas](#execução-completa) gravadas.
 
 | Ação | Comando |
 | --- | --- |
@@ -206,6 +206,10 @@ O gerador mede as quatro operações do produto nos dois lados, em laço fechado
 | Restaurar a base e medir só a queda do Cassandra | `python benchmark/medir.py --operacoes queda` |
 | Medir só algumas operações ou um lado, com outras durações | `python benchmark/medir.py --operacoes contador registro --lados postgres --duracao 20 --aquecimento 5` |
 | Medir sobre o estado atual, sem restaurar em momento nenhum, nem antes do histórico | `python benchmark/medir.py --sem-restaurar` |
+| Rodar também a curva extra do PostgreSQL, com `synchronous_commit=off`, no contador e no registro de clique | `python benchmark/medir.py --curva-extra contador registro` |
+| Rodar a sequência ao vivo da tela de testes, pelo terminal | `python benchmark/medir.py --ao-vivo` |
+| Rodar a execução completa e gravá-la em `benchmark/gravacoes/` | `python benchmark/medir.py --completa` |
+| Abrir a tela de testes | `python benchmark/tela.py` e `http://127.0.0.1:8002` |
 | Calibrar: medir as quatro operações com 8, 32 e 64 conexões e escolher o número | `python benchmark/calibrar.py` |
 
 `--conexoes` vale 8 por padrão, o número escolhido pela calibração. Se uma nova calibração escolher outro número, passe-o em toda medição, como em `python benchmark/medir.py --conexoes 32`. `--duracao` (60 s) e `--aquecimento` (10 s) seguem a execução completa. `--processos` muda o número de processos do gerador, que por padrão é um por conexão.
@@ -226,6 +230,7 @@ O [medir.py](medir.py) roda no computador, como o `base.py`, e pega a mesma trav
 - **Clique gravado:** instante atual, `clique_id` `timeuuid` do mesmo instante, `pais` vazio, dispositivo e referrer na mesma proporção da base. Os instantes ficam depois da janela do histórico.
 - **Redis no master,** o banco que tem o mesmo teto dos outros dois.
 - **Comandos preparados:** `prepare` no Cassandra e `prepare=True` no PostgreSQL. O Redis não tem comando preparado.
+- **Curva extra:** com `--curva-extra`, o contador e o registro de clique rodam uma segunda vez no PostgreSQL, com `SET synchronous_commit = off` em cada conexão do gerador, só na sessão. A configuração do servidor continua a padrão, e o gerador confere com `SHOW synchronous_commit` que a sessão aceitou o valor. O resultado fica com `curva_extra: true` e aparece como "PostgreSQL, synchronous_commit=off (fora do padrão)" (ADR-0014, Q-73).
 - **Conexões:** um processo por conexão, com uma thread cada, para as conexões não disputarem o interpretador do Python (ver [Calibração](#calibração)). Cada thread tem a sua conexão e uma operação pendente nela. No Cassandra, cada conexão é um `Cluster` próprio do driver, com uma conexão de dados com o nó e outra de controle, quase parada. Durante um histórico com 8 conexões, `system_views.clients` mostrou 8 conexões de dados, com cerca de 3.000 pedidos cada, e 8 de controle, com 5.
 
 ### Métricas
@@ -239,8 +244,12 @@ O [medir.py](medir.py) roda no computador, como o `base.py`, e pega a mesma trav
 | CPU do gerador | `usage_usec` do cgroup do contêiner, de `cpu.stat`, na janela medida, dividido pelo tempo: dá os núcleos usados. Dividido também pelas CPUs do limite (`cpu.max`), dá o percentual da cota, registrado arredondado em `cpu_gerador_pct` e sem arredondamento em `cpu_gerador_pct_exato` |
 | CPU do banco | o mesmo cálculo em cada contêiner de banco exercitado (Redis master, Cassandra ou PostgreSQL; no pico do lado NoSQL, o Redis master e o Cassandra), lido pelo `medir.py` com `docker exec` no início e no fim da janela, que o gerador marca na saída. Fica em `cpu_bancos`, por banco |
 | Memória do gerador | pico do cgroup do contêiner (`memory.peak`), da partida ao fim da execução |
+| Série por segundo | em `serie`, uma linha por segundo desde a partida, aquecimento incluído: por operação, as operações concluídas naquele segundo, os erros e o p95. Conta pela hora de conclusão, e por isso só ilustra: o placar usa as métricas acima |
+| CPU e memória dos bancos por segundo | em `serie_recursos`, lidas pelo `medir.py` com `docker exec` a cada segundo desde a partida: CPU em % do teto (`cpu.stat` e `cpu.max`) e memória em uso do contêiner (`memory.current`, que inclui o cache de arquivos) |
 
 As operações que começam no aquecimento são descartadas, e só entram as que começam dentro da janela medida.
+
+**Custo da `serie_recursos`.** A leitura por segundo roda dentro da janela medida e entra nos números. Cada `docker exec` gasta de 14 a 19 ms de CPU no cgroup do banco, cerca de 1,5 a 2% de um núcleo. Em 25/11/2026, com 8 conexões, 5 s de aquecimento e 30 s medidos, em 3 pares alternados com e sem a série, a maior diferença na mediana foi de −2,2% na vazão do redirecionamento no PostgreSQL, com o banco no teto de CPU. No redirecionamento no Redis e no histórico nos dois lados, a diferença ficou entre −1,1% e +1,5%, dentro da variação entre execuções. O custo vale para os dois lados, e a série fica nas execuções oficiais porque as curvas das gravações dependem dela (Q-71, Q-74).
 
 ### Execução de desenvolvimento
 
@@ -390,7 +399,7 @@ A API roda com as bibliotecas do ambiente virtual da aplicação, em `.venv` ([a
 | `erros_no_controle` | Os erros dos comandos do Docker para parar e religar o Cassandra; vazio numa rodada válida |
 | `fases` e `total` | As mesmas métricas antes da parada (0 a 30 s), com o Cassandra parado (30 a 60 s), na volta (60 a 90 s) e nos 90 s |
 | `conferencia` | Aumentos do contador, do histórico e das falhas, a diferença entre o contador e o histórico, essa diferença menos as falhas e, em `erro`, o erro da consulta ao Cassandra, se ela falhou |
-| `serie` | Por segundo: envios, `302`, p95 no servidor e no gerador, falhas e contador |
+| `serie` | Por segundo: envios, `302`, p95 no servidor e no gerador, falhas e contador lidos, e quanto as falhas e o contador aumentaram desde a leitura de antes da carga (`falhas_na_etapa` e `contador_na_etapa`). Durante a carga, cada segundo sai também numa linha `PARCIAL`, para a [tela de testes](#tela-de-testes) |
 
 O registro traz também a CPU e a memória do gerador, como nas outras etapas. A CPU dos bancos não é lida, porque o Cassandra para no meio da janela.
 
@@ -434,7 +443,7 @@ Os aumentos do contador e das falhas na janela vêm das leituras a cada 0,25 s e
 
 #### Critérios conferidos
 
-- **CA-6, na execução de teste:** enquanto o Cassandra esteve fora para a aplicação, dos 30 s aos 74,0 s, os 8.801 redirecionamentos responderam `302`, com p95 no servidor de 1,450 ms, abaixo dos 50 ms. Na mesma janela, o contador somou 8.800 entre as consultas ao Redis dos 30,0 s e dos 74,0 s, dentro da margem das leituras, e as falhas, 8.780. A rodada foi válida: nenhum comando do Docker falhou, e o contador da janela foi determinado. A exibição das falhas na tela fica para a tela de testes (RM-32), e as 3 execuções, para a execução completa (RM-33). Por isso o CA-6 continua desmarcado na [SPEC-005](../docs/specs/SPEC-005-testes-de-stress.md#critérios-de-aceitação).
+- **CA-6, na execução de teste:** enquanto o Cassandra esteve fora para a aplicação, dos 30 s aos 74,0 s, os 8.801 redirecionamentos responderam `302`, com p95 no servidor de 1,450 ms, abaixo dos 50 ms. Na mesma janela, o contador somou 8.800 entre as consultas ao Redis dos 30,0 s e dos 74,0 s, dentro da margem das leituras, e as falhas, 8.780. A rodada foi válida: nenhum comando do Docker falhou, e o contador da janela foi determinado. Os cliques que falharam aparecem na [tela de testes](#tela-de-testes) (RM-32); as 3 execuções ficam para a execução completa oficial (RM-33). Por isso o CA-6 continua desmarcado na [SPEC-005](../docs/specs/SPEC-005-testes-de-stress.md#critérios-de-aceitação).
 - **Tempo real de volta:** o Cassandra voltou a aceitar conexões 13,5 s depois do religamento, e a aplicação gravou o primeiro clique 0,4 s depois disso, aos 73,9 s, antes do fim da etapa. A janela de 30 s e a etapa de 90 s continuam valendo, e o aviso do ADR-0014 de que a volta poderia passar dos 30 s previstos foi verificado sem exigir decisão nova.
 
 #### Leitura
@@ -445,3 +454,90 @@ Os aumentos do contador e das falhas na janela vêm das leituras a cada 0,25 s e
 - **A diferença entre o contador e o histórico foi exatamente o número de falhas** nas duas execuções: nenhuma escrita falhou na aplicação e foi concluída no Cassandra, e nenhum incremento se perdeu.
 - **Execuções anteriores.** Das 01h22 às 03h11, outras catorze execuções, automáticas e manuais, com versões anteriores do cenário, tiveram a mesma forma: todos os envios com `302`, p95 no servidor entre 1,465 e 6,974 ms na queda, volta entre 75 e 83 s e diferença igual às falhas. Nas automáticas, a porta CQL abriu de 13,8 a 16,0 s depois do religamento. Na primeira, às 01h22, as leituras das falhas e do contador travaram por 3 a 4 s com o Cassandra parado, porque a sondagem da porta ainda ficava na mesma thread. A latência dela já era maior antes da parada (p95 de 5,9 ms de 0 a 30 s), e por isso não veio da queda. O mesmo vale para a manual das 03h09, com p95 de 6,8 ms já de 0 a 30 s.
 - **Medição de desenvolvimento.** Os números são do computador de desenvolvimento, com outros programas abertos. As 3 execuções que valem para o CA-6 rodam na máquina da apresentação, na execução completa (CA-4).
+
+## Tela de testes
+
+Passo 6 do [plano de testes](../docs/specs/SPEC-005-testes-de-stress.md#plano-de-implementação) (RM-32). A tela controla o benchmark inteiro pelo navegador: prepara os bancos, restaura a base, inicia a sequência ao vivo e a execução completa, mostra a etapa atual, as curvas dos dois lados sobrepostas e o placar de cada etapa, abre as [execuções completas](#execução-completa) gravadas e devolve o ambiente de desenvolvimento. As decisões estão nas questões Q-70 a Q-76 em [QUESTOES](../docs/requisitos/QUESTOES.md#respondidas).
+
+Abra com `python benchmark/tela.py` e, no navegador, `http://127.0.0.1:8002` (`--porta` troca a porta). Os botões rodam os mesmos comandos do terminal, que continuam valendo:
+
+| Botão | Comando |
+| --- | --- |
+| 1. Parar os bancos de desenvolvimento | `docker compose stop` |
+| 2. Restaurar a base | `python benchmark/base.py restaurar` |
+| 3. Iniciar sequência ao vivo | `python benchmark/medir.py --ao-vivo --eventos` |
+| Conferir a base | `python benchmark/base.py conferir` |
+| Execução completa, de teste | `python benchmark/medir.py --completa --duracao 5 --aquecimento 2 --eventos` |
+| Execução completa, oficial | `python benchmark/medir.py --completa --eventos` |
+| Carregar a base do zero | `python benchmark/base.py carregar` |
+| Voltar ao desenvolvimento | `docker compose stop` e `docker compose up -d --wait` |
+
+**Como funciona:**
+
+- **Servidor.** O [tela.py](tela.py) usa só a biblioteca padrão do Python, como o `base.py`, e escuta em `127.0.0.1:8002`, fora da 8000 da demonstração e da 8001 da queda. Ele serve a página de [tela/](tela/) e, sem cópia, o `painel.css` e o Chart.js 4.6.1 da tela da aplicação, em `app/static/`. Nenhum arquivo da tela aponta para a internet. A página abre com os bancos parados, e as gravações abrem sem Docker (Q-70). Uma segunda tela na mesma porta sai com erro.
+- **Tarefas** (Q-76). Cada botão roda o seu comando como processo filho, um por vez: com uma tarefa rodando, os botões ficam desabilitados, e um pedido direto recebe `409`. O servidor só aceita pedidos `POST` vindos da própria tela (`Host` e `Origin` em `127.0.0.1` ou `localhost` na porta dela); os outros recebem `403`. A saída de cada comando, e cada linha `EVENTO {json}` do `medir.py`, chegam à tela por *Server-Sent Events*. Uma aba que abre ou recarrega no meio recebe a última medição desde o início e as tarefas seguintes. As proteções continuam nos comandos: a trava da base, a recusa a mexer nos volumes de desenvolvimento e a conferência depois de restaurar. Quando um comando recusa, a tela mostra a mensagem dele e abre a saída completa.
+- **Bancos.** A cada 5 s, a tela lê no Docker com que volumes cada banco está no ar (desenvolvimento, benchmark, em parte ou parados) e só habilita os botões que cabem: restaurar com os bancos de desenvolvimento parados, iniciar a sequência ao vivo com os quatro bancos do benchmark no ar. Mostra também a hora da última restauração ou carga registrada em `benchmark/registros/` e quantas medições foram registradas depois dela; os passos 1 e 2 aparecem marcados quando estão feitos.
+- **Interromper.** Com uma tarefa rodando, o botão "Interromper" encerra o comando e os processos filhos dele (no Windows, com `taskkill /T`), como a API da queda. A trava se solta sozinha, e o próximo comando espera os contêineres auxiliares que ainda estiverem rodando. Depois de interromper, restaure a base antes de medir de novo.
+- **Sequência ao vivo** (Q-72). Parte da base como está, sem restaurar: a restauração é o passo 2, fora dos 480 s. Nas etapas 1 a 4, cada execução tem 3 s de aquecimento descartados e 18 s medidos; no pico, 3 s e 45 s; a queda mantém os 90 s. A curva extra roda só no registro de clique. O relógio e a barra de progresso contam do clique no botão ao fim da medição, e o limite é de 480 s (CA-7).
+- **Execução completa pela tela.** A tela mostra a repetição em andamento, com as restaurações entre elas, e, quando a gravação termina, abre-a com a mediana.
+- **Curvas** (Q-71). Cada etapa tem um gráfico, com o eixo em segundos desde a partida de cada lado, e por isso os dois lados aparecem sobrepostos, e o aquecimento sombreado como descartado. Botões trocam a métrica: vazão e p95 por segundo, da `serie` do gerador, e CPU (% do teto) e memória de cada banco exercitado, da `serie_recursos`. No pico, a vazão conta cliques completos, os registros concluídos, e o p95 tem uma linha por operação. A curva extra aparece tracejada, com o rótulo "PostgreSQL, synchronous_commit=off (fora do padrão)".
+- **Placar.** Vazão, p50, p95, p99 e erros, com a taxa de erro, de cada lado, por etapa, com os números do resultado de cada execução, calculados como na [tabela de métricas](#métricas). No pico, uma linha por operação.
+- **Queda** (Q-75). O gráfico mostra os redirecionamentos com `302` e os cliques que falharam ao gravar, por segundo, com linhas na parada (30 s), no religamento (60 s) e na volta da gravação, e a janela do CA-6 sombreada quando o resultado chega. Enquanto a etapa roda, uma linha mostra quantos `302`, quantos cliques que falharam e quanto o contador somou até ali. O placar mostra a janela do CA-6, os `302`, o p95 no servidor, os cliques que falharam na janela e na conferência, quanto o contador somou, a diferença entre o contador e o histórico, essa diferença menos as falhas e se o CA-6 foi cumprido, não foi ou se a rodada é inválida.
+- **Execução gravada** (Q-74). A lista "Execuções", na barra lateral, traz a última medição pedida pela tela e as gravações de `benchmark/gravacoes/`, da mais nova para a mais antiga. A gravação abre inteira, sem animação, com a faixa "Execução gravada em …, não é ao vivo" e, nas de teste, "gravação de teste, com durações curtas". O placar das etapas 1 a 5 mostra a mediana das repetições; o da queda, uma linha por repetição. As curvas mostram uma repetição por vez, escolhida no seletor. Abrir uma gravação não interrompe a medição em andamento, que volta à tela pelo primeiro item da lista.
+
+**Bancos da aplicação.** A sequência ao vivo usa os mesmos contêineres de banco que a aplicação da demonstração, com os volumes do benchmark, e a queda para o Cassandra. Durante a sequência, a demonstração da aplicação não deve ser usada; depois, o ambiente de desenvolvimento volta pelo botão "Voltar ao desenvolvimento".
+
+#### Medições
+
+Medido em 25/11/2026, às 05h47 (horário de Brasília), no computador de desenvolvimento (o mesmo das [medições da base](#resultados-medidos)), com o botão da tela. A base foi restaurada antes, com `python benchmark/base.py restaurar`, e o CA-1 foi conferido. A sequência levou 457,5 s do clique ao fim da medição, dentro dos 480 s, e nenhuma execução teve erro. Cada execução das etapas 1 a 4 levou cerca de 26,5 s, 21 s de carga e o resto para subir o contêiner e abrir as conexões; o pico, 53 s por lado; a queda, 107 s, com a subida da API e a conferência.
+
+| Etapa | Lado | Início, desde o clique (s) | Vazão (ops/s) | p50 (ms) | p95 (ms) | p99 (ms) |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| Redirecionamento | NoSQL | 3,2 | 42.718 | 0,162 | 0,320 | 0,534 |
+| Redirecionamento | PostgreSQL | 30,4 | 24.934 | 0,172 | 0,308 | 0,484 |
+| Contador | NoSQL | 56,6 | 40.295 | 0,180 | 0,313 | 0,455 |
+| Contador | PostgreSQL | 83,2 | 1.209 | 4,217 | 19,582 | 33,849 |
+| Registro de clique | NoSQL | 109,7 | 6.468 | 0,757 | 1,168 | 19,179 |
+| Registro de clique | PostgreSQL | 136,0 | 4.873 | 1,272 | 4,357 | 4,902 |
+| Registro de clique | PostgreSQL, `synchronous_commit=off` (fora do padrão) | 162,7 | 17.375 | 0,240 | 0,421 | 0,686 |
+| Histórico por período | NoSQL | 189,5 | 1.518 | 1,642 | 35,397 | 58,923 |
+| Histórico por período | PostgreSQL | 216,2 | 6.262 | 0,271 | 2,436 | 48,643 |
+| Pico (cliques completos) | NoSQL | 243,3 | 5.331 | 0,864 no registro | 1,330 no registro | 2,082 no registro |
+| Pico (cliques completos) | PostgreSQL | 297,1 | 305 | 16,785 no contador | 52,903 no contador | 79,043 no contador |
+
+Na queda, que começou aos 350,3 s, a janela do CA-6 foi dos 30 s aos 77,0 s. Os 9.401 redirecionamentos dela responderam `302`, com p95 de 1,56 ms no servidor. O contador somou 9.400 na janela, e 9.383 cliques falharam ao gravar. Na conferência, a diferença entre o contador e o histórico foi de 9.383, igual às falhas. O Cassandra abriu a porta aos 75,6 s, e o primeiro clique foi gravado aos 77,0 s.
+
+#### Critérios conferidos
+
+- **CA-7:** o botão iniciou a sequência, e um segundo clique durante ela recebeu `409`. Capturas da página pelo Edge headless, aos 145 s e aos 396 s, mostraram a etapa atual, as curvas dos dois lados sobrepostas crescendo, o placar das etapas concluídas e o relógio. A sequência terminou em 457,5 s, dentro dos 480 s.
+- **Cliques que falharam (parte do CA-6):** aos 40 s da queda, a página mostrava 8.000 redirecionamentos com `302`, 1.941 cliques que falharam ao gravar e o contador com +7.950; no fim, o gráfico por segundo e o placar com as 9.383 falhas, na janela e na conferência. O CA-6 continua desmarcado na [SPEC-005](../docs/specs/SPEC-005-testes-de-stress.md#critérios-de-aceitação): faltam as 3 execuções oficiais (RM-33).
+- **Sem internet:** o Edge rodou com um proxy inexistente para tudo fora de `127.0.0.1`. A página carregou com os gráficos, e todos os pedidos foram ao `127.0.0.1:8002`: a página, o CSS, o script, o Chart.js e as rotas `/api/`.
+
+#### Leitura
+
+- **A curva extra mostra o peso da gravação em disco no PostgreSQL.** Com `synchronous_commit=off`, o registro de clique foi de 4.873 para 17.375 ops/s, e o p95 caiu de 4,357 para 0,421 ms, mais rápido que o Cassandra nesta execução. A hipótese da [calibração](#leitura), de que as escritas do PostgreSQL esperavam o `fsync` de cada confirmação, fica medida no registro; o contador com a curva extra roda só na execução completa.
+- **No pico, o PostgreSQL ficou limitado pelo contador.** Com as 8 conexões no link popular, o `UPDATE` da mesma linha fez o contador esperar (p95 de 52,9 ms), e o lado completou 305 cliques por segundo, contra 5.331 no lado NoSQL.
+- **Medição de desenvolvimento e curta.** A sequência ao vivo só ilustra: 18 s medidos por lado, sem repetição e com outros programas abertos. Os números para a apresentação são os da execução completa.
+
+## Execução completa
+
+Passo 7 do [plano de testes](../docs/specs/SPEC-005-testes-de-stress.md#plano-de-implementação). `python benchmark/medir.py --completa` repete a sequência inteira, queda incluída, 3 vezes (Q-36). Restaura a base antes de cada repetição e antes do histórico por período, roda a curva extra no contador e no registro de clique e grava o resultado em `benchmark/gravacoes/`, no Git, ao contrário de `benchmark/registros/` (Q-74). As durações seguem `--duracao` e `--aquecimento`: com 60 s e 10 s, todas as etapas e os dois lados, a gravação é `completa`; com qualquer outra combinação, ou com `--queda-manual`, é `teste`. As execuções oficiais rodam na máquina da apresentação (RM-33). Se um comando falhar no meio, nada é gravado em `gravacoes/`, e o que já foi medido vai para `registros/`.
+
+| Campo da gravação | Conteúdo |
+| --- | --- |
+| `formato` | Versão do formato, hoje `1` |
+| `tipo` | `completa` ou `teste` |
+| `inicio` e `gravada_em` | Início da medição e hora da gravação, com o fuso do computador |
+| `maquina` | Sistema operacional e número de CPUs do computador |
+| `parametros` | Os argumentos do `medir.py` |
+| `mediana` | Uma linha por etapa de 1 a 5, lado e curva extra, com a mediana de cada métrica entre as repetições: operações, erros, vazão, p50, p95, p99 e taxa de erro; no pico, por operação. Cada métrica tem a sua mediana, que pode vir de repetições diferentes |
+| `repeticoes` | As 3 repetições, cada uma com `restauracoes` e `execucoes` no formato do registro do `medir.py`, com a `serie` e a `serie_recursos` de cada execução e o resultado completo de cada queda |
+
+### Gravação de teste
+
+Gravada em 25/11/2026, das 05h56 às 06h16 (horário de Brasília), no computador de desenvolvimento, com `python benchmark/medir.py --completa --duracao 5 --aquecimento 2`: [gravacoes/20261125-061623-teste.json](gravacoes/20261125-061623-teste.json). As durações curtas servem só para conferir o formato e a tela; os números não valem para a apresentação. A execução levou 20 min 25 s, com 6 restaurações, duas por repetição, todas com o CA-1 conferido. Cada repetição tem 13 execuções: as 11 da sequência e a curva extra no contador e no registro de clique. A mediana tem 12 linhas, uma por etapa de 1 a 5, lado e curva extra, e confere com o cálculo refeito a partir das repetições. Nas 3 quedas, todos os redirecionamentos da janela do CA-6 responderam `302`, com p95 no servidor entre 1,371 e 1,540 ms; a diferença entre o contador e o histórico foi igual às falhas, e o CA-6 saiu cumprido nas três.
+
+#### Critérios conferidos
+
+- **CA-8, com a gravação de teste:** com o Edge sob um proxy inexistente para tudo fora de `127.0.0.1` e com todos os contêineres parados, a tela carregou os gráficos, listou a gravação e a abriu com a faixa "Execução gravada em 25/11/2026, 06:16 · gravação de teste, com durações curtas · não é ao vivo". O placar mostrou a mediana de 3 repetições, a curva extra apareceu tracejada no contador e no registro, o seletor trocou as curvas para a repetição 2, e a queda mostrou uma linha por repetição. Todos os pedidos foram ao `127.0.0.1:8002`. A conferência com a execução completa oficial fica na RM-33, e por isso o CA-8 continua desmarcado na [SPEC-005](../docs/specs/SPEC-005-testes-de-stress.md#critérios-de-aceitação).
+- **Botão com os bancos parados:** o `medir.py` saiu com código 1, e a tela mostrou o código e, na saída da medição, a mensagem dos bancos parados com o comando de restauração.
