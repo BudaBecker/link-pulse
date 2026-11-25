@@ -4,8 +4,8 @@
 # (a base de referência). Este arquivo troca os volumes dos bancos comparados, e
 # da réplica do Redis, por volumes próprios do benchmark, com nome fixo. Assim,
 # carregar e restaurar a base nunca tocam os volumes de desenvolvimento
-# (linkpulse_*-dados) nem os de outros projetos. Também define o serviço
-# `carga`, que carrega e confere a base.
+# (linkpulse_*-dados) nem os de outros projetos. Também define os serviços
+# `carga`, que carrega e confere a base, e `gerador` e `gerador-queda`, que medem.
 #
 # Não é usado à mão: o benchmark/base.py o soma ao docker-compose.yml
 # (docker compose -f docker-compose.yml -f docker-compose.benchmark.yml).
@@ -67,6 +67,24 @@ services:
     volumes:
       - ./benchmark:/linkpulse/benchmark:ro
       - manifesto-benchmark:/linkpulse/manifesto:ro
+
+  gerador-queda:
+    # Cenário de queda do Cassandra: roda benchmark/queda.py, chamado pelo
+    # benchmark/medir.py. É o único serviço com acesso ao Docker, para parar e
+    # religar o Cassandra (ADR-0013, Q-65). Alcança a API, que roda no computador,
+    # por host.docker.internal.
+    build: .
+    profiles: ["benchmark"]
+    command: ["python", "benchmark/queda.py", "--help"]
+    cpus: "2"
+    mem_limit: 1g
+    memswap_limit: 1g
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./benchmark:/linkpulse/benchmark:ro
+      - manifesto-benchmark:/linkpulse/manifesto:ro
+      - /var/run/docker.sock:/var/run/docker.sock
 
 volumes:
   redis-master-benchmark:

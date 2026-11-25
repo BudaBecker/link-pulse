@@ -1,6 +1,6 @@
 # Benchmark do LinkPulse
 
-O benchmark do LinkPulse compara as mesmas operações no lado NoSQL (Redis e Cassandra) e no PostgreSQL, e a comparação só vale se os dois lados tiverem exatamente os mesmos dados. Esta pasta carrega esses dados, sempre iguais para a mesma semente, nos dois lados: clientes, links e cliques. Depois guarda uma cópia dos volumes dos bancos, para voltar a esse estado antes de cada repetição das medições. A pasta também tem o [gerador de carga](#gerador-de-carga), que mede as quatro operações sobre essa base. A base é o passo 1 do plano dos testes de stress ([SPEC-005](../docs/specs/SPEC-005-testes-de-stress.md#plano-de-implementação)), na tarefa de carregar os dados de referência nos dois lados (RM-29). Os dados seguem o modelo e o método do benchmark ([ADR-0014](../docs/decisoes/ADR-0014-modelo-de-dados-e-metodo-do-benchmark.md#dados-e-durações)).
+O benchmark do LinkPulse compara as mesmas operações no lado NoSQL (Redis e Cassandra) e no PostgreSQL, e a comparação só vale se os dois lados tiverem exatamente os mesmos dados. Esta pasta carrega esses dados, sempre iguais para a mesma semente, nos dois lados: clientes, links e cliques. Depois guarda uma cópia dos volumes dos bancos, para voltar a esse estado antes de cada repetição das medições. A pasta também tem o [gerador de carga](#gerador-de-carga), que mede as quatro operações sobre essa base, e o cenário de [queda do Cassandra](#queda-do-cassandra). A base é o passo 1 do plano dos testes de stress ([SPEC-005](../docs/specs/SPEC-005-testes-de-stress.md#plano-de-implementação)), na tarefa de carregar os dados de referência nos dois lados (RM-29). Os dados seguem o modelo e o método do benchmark ([ADR-0014](../docs/decisoes/ADR-0014-modelo-de-dados-e-metodo-do-benchmark.md#dados-e-durações)).
 
 ## Como usar
 
@@ -20,7 +20,7 @@ Os comandos rodam no próprio computador, fora dos contêineres, na raiz do repo
 
 `carregar` e `manifesto` aceitam `--semente`, `--fim` (instante final, em ISO 8601 com fuso, como `2026-11-01T00:00:00Z`, entre 2000 e 2100) e `--processos` (padrão 4). Um `--fim` fora dessa regra é recusado antes de qualquer coisa ser gerada, gravada ou apagada. O manifesto gerado também passa pela validação antes de ir para o espelho e, na carga, antes de os volumes serem apagados. Cada `carregar`, `copiar` e `restaurar` grava os tempos e a memória medidos em `benchmark/registros/`, fora do Git.
 
-**Um comando por vez.** `copiar` e `restaurar` deixam os bancos parados enquanto trocam os volumes, e outro comando no meio poderia religá-los. Por isso os comandos `carregar`, `copiar`, `restaurar`, `conferir` e o script de medição usam a mesma trava: um contêiner com nome fixo, `linkpulse-benchmark-trava`, que o Docker não deixa existir duas vezes. Os volumes e o projeto Compose também têm nome fixo, então a trava vale para qualquer cópia do repositório que use o mesmo Docker. Enquanto um comando roda, os outros saem com erro e dizem qual comando, processo e pasta estão com a trava. O contêiner da trava lê a entrada padrão do comando: quando o comando termina ou morre, essa entrada se fecha, o contêiner sai e o Docker o apaga (`--rm`).
+**Um comando por vez.** `copiar` e `restaurar` deixam os bancos parados enquanto trocam os volumes, e outro comando no meio poderia religá-los. Por isso os comandos `carregar`, `copiar`, `restaurar`, `conferir` e o script de medição usam a mesma trava: um contêiner com nome fixo, `linkpulse-benchmark-trava`, que o Docker não deixa existir duas vezes. Os volumes e o projeto Compose também têm nome fixo, então a trava vale para qualquer cópia do repositório que use o mesmo Docker. Enquanto um comando roda, os outros saem com erro e dizem qual comando, processo e pasta estão com a trava. O contêiner da trava lê a entrada padrão do comando: quando o comando termina ou morre, essa entrada se fecha, o contêiner sai e o Docker o apaga (`--rm`). O script de reserva da queda do Cassandra não usa a trava, porque roda durante a medição (ver [Queda do Cassandra](#queda-do-cassandra)).
 
 Os contêineres que os comandos criam para mexer na base (cópia de volumes, leitura e gravação do manifesto, `carga`) levam o rótulo `linkpulse.benchmark.auxiliar` e podem continuar no Docker depois que o comando morre. Por isso, logo depois de pegar a trava, o comando espera terminar qualquer auxiliar de um comando anterior e avisa quais está esperando. Um auxiliar criado e ainda não iniciado (estado `created`) é removido, sem forçar: se ele começar a rodar no meio da remoção, o Docker recusa e ele passa a ser esperado. Ele é removido porque nenhum comando vivo vai iniciá-lo e o cliente do Docker do comando morto ainda poderia fazer isso no meio da operação. A conferência roda o contêiner `carga` com `--no-deps`, que não sobe os bancos de que ele depende, e recusa bancos parados: ela nunca liga um banco.
 
@@ -197,12 +197,13 @@ Dispositivos, nos dois lados e lidos linha a linha: 6.000.000 `mobile` (60%), 3.
 
 ## Gerador de carga
 
-O gerador mede as quatro operações do produto nos dois lados, em laço fechado: um número fixo de conexões, e cada uma só envia a próxima operação quando a anterior responde ([ADR-0014](../docs/decisoes/ADR-0014-modelo-de-dados-e-metodo-do-benchmark.md#como-a-carga-é-aplicada)). O gerador mede a leitura do link, o incremento do contador, a gravação de clique, a consulta ao histórico e o [pico de tráfego](#pico-de-tráfego), as etapas 1 a 5 da sequência de testes. A [calibração](#calibração) escolheu o número de conexões. O cenário de queda do Cassandra e a tela de resultados são as próximas entregas do [plano de testes](../docs/specs/SPEC-005-testes-de-stress.md#plano-de-implementação).
+O gerador mede as quatro operações do produto nos dois lados, em laço fechado: um número fixo de conexões, e cada uma só envia a próxima operação quando a anterior responde ([ADR-0014](../docs/decisoes/ADR-0014-modelo-de-dados-e-metodo-do-benchmark.md#como-a-carga-é-aplicada)). O gerador mede a leitura do link, o incremento do contador, a gravação de clique, a consulta ao histórico e o [pico de tráfego](#pico-de-tráfego), as etapas 1 a 5 da sequência de testes. A [calibração](#calibração) escolheu o número de conexões. A [queda do Cassandra](#queda-do-cassandra), a etapa 6, passa pela aplicação, em laço aberto. A tela de resultados é a próxima entrega do [plano de testes](../docs/specs/SPEC-005-testes-de-stress.md#plano-de-implementação).
 
 | Ação | Comando |
 | --- | --- |
-| Restaurar a base e medir as etapas 1 a 5 nos dois lados: as quatro operações e o pico | `python benchmark/medir.py` |
+| Restaurar a base e medir a sequência de testes: as quatro operações e o pico nos dois lados, e a queda do Cassandra | `python benchmark/medir.py` |
 | Restaurar a base e medir só o pico de tráfego | `python benchmark/medir.py --operacoes pico` |
+| Restaurar a base e medir só a queda do Cassandra | `python benchmark/medir.py --operacoes queda` |
 | Medir só algumas operações ou um lado, com outras durações | `python benchmark/medir.py --operacoes contador registro --lados postgres --duracao 20 --aquecimento 5` |
 | Medir sobre o estado atual, sem restaurar em momento nenhum, nem antes do histórico | `python benchmark/medir.py --sem-restaurar` |
 | Calibrar: medir as quatro operações com 8, 32 e 64 conexões e escolher o número | `python benchmark/calibrar.py` |
@@ -319,7 +320,7 @@ Passo 4 do [plano de testes](../docs/specs/SPEC-005-testes-de-stress.md#plano-de
 
 **Estado dos dados.** Na sequência de testes, o pico roda depois do histórico por período, que só lê, e por isso parte do estado restaurado antes do histórico. Nesse caso, o `medir.py` não restaura de novo antes do pico. Numa seleção sem o histórico, como `--operacoes registro pico`, ele restaura antes do pico, porque o registro acrescentou cliques em cada lado na vazão do próprio lado. Medido sozinho, com `python benchmark/medir.py --operacoes pico`, o pico restaura a cópia antes de começar e parte do mesmo estado. Cada lado escreve só nos próprios bancos, então a ordem dos lados não muda o estado que o outro encontra.
 
-**Comando reproduzível.** `python benchmark/medir.py` mede as etapas 1 a 5 nos dois lados, com 8 conexões, 10 s de aquecimento e 60 s medidos por lado, restaurando a base antes do redirecionamento e antes do histórico. Em outra máquina, passe o número da calibração dela, como em `python benchmark/medir.py --conexoes 32`. O registro fica em `benchmark/registros/`, e o pico aparece com `operacao: "pico"` e as métricas de cada operação em `por_operacao`.
+**Comando reproduzível.** `python benchmark/medir.py` mede as etapas 1 a 5 nos dois lados, com 8 conexões, 10 s de aquecimento e 60 s medidos por lado, restaurando a base antes do redirecionamento e antes do histórico, e depois a [queda do Cassandra](#queda-do-cassandra). Em outra máquina, passe o número da calibração dela, como em `python benchmark/medir.py --conexoes 32`. O registro fica em `benchmark/registros/`, e o pico aparece com `operacao: "pico"` e as métricas de cada operação em `por_operacao`.
 
 #### Medições
 
@@ -355,3 +356,88 @@ A comparação com os 70% usa o percentual sem arredondamento: 62,497% no lado N
 - **O gerador ficou mais perto do teto no pico** do que nas operações isoladas: 62,5% da cota, por causa do driver do Cassandra, que é o que mais pesa no gerador (ver [Calibração](#calibração)). Na máquina da apresentação, confira essa margem depois de calibrar.
 - **O redirecionamento continua rápido nos dois lados.** No PostgreSQL, a leitura do link não espera o bloqueio do contador: o p95 ficou em 0,29 ms.
 - **Medição de desenvolvimento.** Os números são de uma execução no computador de desenvolvimento, com outros programas abertos. A comparação para a apresentação depende das 3 repetições na máquina dedicada (CA-4).
+
+### Queda do Cassandra
+
+Passo 5 do [plano de testes](../docs/specs/SPEC-005-testes-de-stress.md#plano-de-implementação) (RM-44), a etapa 6 da sequência de testes. É a única etapa que passa pela aplicação: 200 redirecionamentos por segundo, em laço aberto, durante 90 s. O Cassandra para aos 30 s e volta aos 60 s, de forma automática ([ADR-0014](../docs/decisoes/ADR-0014-modelo-de-dados-e-metodo-do-benchmark.md#como-a-carga-é-aplicada)). O cenário mede se o redirecionamento continua respondendo `302` rápido com o Cassandra fora (RNF-01, RNF-02), se o contador continua somando e quantos cliques se perdem (RN-07). As decisões de método são as questões Q-62 a Q-68 em [QUESTOES](../docs/requisitos/QUESTOES.md#respondidas).
+
+| Ação | Comando |
+| --- | --- |
+| Restaurar a base e medir a queda | `python benchmark/medir.py --operacoes queda` |
+| Medir a queda sobre o estado atual da base | `python benchmark/medir.py --operacoes queda --sem-restaurar` |
+| Medir parando e religando o Cassandra à mão, com o script de reserva | `python benchmark/medir.py --operacoes queda --queda-manual` e, num segundo terminal, `python benchmark/queda_manual.py parar` e depois `religar`, quando o `medir.py` avisar |
+
+A API roda com as bibliotecas do ambiente virtual da aplicação, em `.venv` ([app/README.md](../app/README.md#como-rodar)). Não é preciso subir nenhuma API antes: o `medir.py` sobe a dele.
+
+**Como funciona:**
+
+- **API.** Depois de restaurar a base, o `medir.py` sobe a API no computador, como na demonstração, com o Python do `.venv` e `uvicorn` na porta 8001, para não disputar a 8000 com a API da demonstração. A API conecta aos bancos no ar, que são os do benchmark, já conferidos pelo `medir.py`. Ela sobe pelo [api_cronometrada.py](api_cronometrada.py), um envoltório que não muda a aplicação. Ele devolve, no cabeçalho `Server-Timing`, o tempo de cada redirecionamento da chegada do pedido ao início da resposta, a mesma medida do teste da aplicação (Q-59). O log da API vai para `benchmark/registros/queda-api-*.log`, e a API é encerrada ao fim da etapa.
+- **Gerador.** O [queda.py](queda.py) roda no contêiner `gerador-queda` (2 CPUs, 1 GB) e alcança a API por `host.docker.internal`. Todos os envios vão ao link popular. A agenda é fixa: o envio *i* sai em `i / 200` s e vai para o primeiro de 32 workers livre, cada um com uma conexão HTTP persistente. Um envio atrasado sai assim que houver worker livre e nunca é descartado. A latência do gerador conta do instante agendado, então o atraso aparece no resultado em vez de sumir, como acontece no laço fechado (omissão coordenada, nas [consequências do ADR-0014](../docs/decisoes/ADR-0014-modelo-de-dados-e-metodo-do-benchmark.md#consequências)).
+- **Parada e religamento.** O `gerador-queda` é o único serviço com o socket do Docker montado (`/var/run/docker.sock`, aceito pelo Docker Desktop no Windows) e fala com a API do Docker pela biblioteca padrão do Python. Aos 30 s, ele para o contêiner do Cassandra, com o prazo de 10 s do `docker compose stop`. Aos 60 s, dispara o religamento sem esperar o healthcheck: a carga segue a agenda, e outra thread registra quando o Docker marca o Cassandra como saudável.
+- **Leituras.** A cada 0,25 s, o gerador lê `falhas_gravacao_clique` em `GET /metricas` e o contador do link no Redis master. Em outra thread, sonda a porta CQL do Cassandra (9042). A sondagem fica separada porque, com o contêiner parado, resolver o nome `cassandra` leva alguns segundos e atrasaria as leituras.
+- **Volta da gravação.** A aplicação volta a gravar até 2 s depois de o Cassandra aceitar conexões, porque o driver tenta reconectar a cada 2 s, no máximo ([SPEC-004](../docs/specs/SPEC-004-aplicacao.md#redirecionamento), Q-66). O gerador marca a volta na última leitura em que as falhas aumentaram, desde que a carga tenha seguido por mais 2 s sem falha nova. Se a gravação não voltar até os 90 s, o resultado mostra isso, e o gerador espera o Cassandra por até 60 s, sem carga, só para a conferência.
+- **Conferência.** 10 s depois do fim da carga, cinco vezes o tempo limite da gravação (Q-41), o gerador lê de novo as falhas e o contador e conta os cliques do link no Cassandra desde o início da etapa. A diferença entre o contador e o histórico são os cliques que o contador somou e o histórico não tem. Ela deve ser igual às falhas, e o resultado mostra quanto se afasta delas, por uma escrita que falhou na aplicação mas foi concluída no Cassandra ou por um incremento perdido no Redis.
+
+**Estado dos dados.** Na sequência de testes, a queda roda depois do pico, sem restaurar: as métricas são aumentos durante a etapa, e o estado inicial não muda o resultado. Medida sozinha, com `--operacoes queda`, a etapa parte da base restaurada, como as outras. A queda só roda quando `--lados` inclui `nosql`.
+
+**Resultado.** Fica em `benchmark/registros/`, com `operacao: "queda"`:
+
+| Campo | Conteúdo |
+| --- | --- |
+| `marcos` | Instantes em segundos desde o início da etapa: parada pedida e concluída, porta CQL fechada e aberta, religamento pedido, Cassandra saudável pelo healthcheck, volta da gravação e primeiro clique gravado depois da parada, lido no próprio Cassandra |
+| `queda` | A janela do CA-6, dos 30 s até a volta da gravação (Q-68): envios, respostas `302`, p50, p95 e p99 no servidor e no gerador, envios atrasados, quanto o contador e as falhas somaram, e `ca6`, verdadeiro quando todos os envios receberam `302`, o p95 no servidor ficou abaixo de 50 ms e o contador e as falhas aumentaram |
+| `fases` e `total` | As mesmas métricas antes da parada (0 a 30 s), com o Cassandra parado (30 a 60 s), na volta (60 a 90 s) e nos 90 s |
+| `conferencia` | Aumentos do contador, do histórico e das falhas, a diferença entre o contador e o histórico e essa diferença menos as falhas |
+| `serie` | Por segundo: envios, `302`, p95 no servidor e no gerador, falhas e contador |
+
+O registro traz também a CPU e a memória do gerador, como nas outras etapas. A CPU dos bancos não é lida, porque o Cassandra para no meio da janela.
+
+**Script de reserva.** O [queda_manual.py](queda_manual.py) para (`docker compose stop`) e religa (`docker compose start --wait`) o Cassandra do benchmark e mostra quanto cada passo levou. Ele recusa bancos no ar com os volumes de desenvolvimento, como os comandos da base, mas não pega a trava, porque roda durante a medição, que já está com ela. Com `--queda-manual`, o gerador não mexe no Docker e avisa, aos 30 s e aos 60 s, a hora de rodar cada comando. Nesse modo, ficam de fora os marcos de parada concluída e de Cassandra saudável, e a porta CQL fechada marca a parada.
+
+#### Medições
+
+Medido em 25/11/2026, no computador de desenvolvimento (o mesmo das [medições da base](#resultados-medidos)), com a API no Windows e os tetos do [ADR-0013](../docs/decisoes/ADR-0013-stack-e-ambiente-do-marco-2.md#decisão), 2 CPUs e 2 GiB no Cassandra, conferidos com `docker inspect`. A execução de teste começou às 01h27 (horário de Brasília), com `python benchmark/medir.py --operacoes queda`, depois de a base ser restaurada e o CA-1 conferido. Uma segunda execução, às 01h29, usou a parada manual com o script de reserva.
+
+| Fase | Envios | `302` | p50 no servidor (ms) | p95 no servidor (ms) | p99 no servidor (ms) | p95 no gerador (ms) | Envios atrasados mais de 5 ms |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Antes (0 a 30 s) | 6.000 | 6.000 | 1,149 | 1,564 | 2,062 | 3,136 | 1 |
+| Parado (30 a 60 s) | 6.000 | 6.000 | 1,062 | 1,403 | 1,830 | 2,890 | 5 |
+| Volta (60 a 90 s) | 6.000 | 6.000 | 1,159 | 1,633 | 2,223 | 3,243 | 0 |
+| **Queda vista pela aplicação (30 a 75,25 s)** | **9.050** | **9.050** | 1,092 | **1,465** | 1,915 | 3,000 | 5 |
+
+Nenhum envio ficou sem resposta, e o maior atraso de envio foi de 26,6 ms, com o Cassandra parado. O gerador usou 0,09 núcleo (4,3% da cota de 2), com pico de 73 MiB.
+
+| Marco, em segundos desde o início da etapa | Execução de teste | Parada manual |
+| --- | ---: | ---: |
+| Parada pedida | 30,0 | 30,0 (aviso) |
+| Porta CQL fechada | 30,1 | 31,6 |
+| Parada concluída (o Docker devolve o `stop`) | 35,8 | — |
+| Religamento pedido | 60,0 | 60,0 (aviso) |
+| Porta CQL aberta | 74,6 | 79,2 |
+| Primeiro clique gravado depois da parada | 75,1 | 79,6 |
+| Volta da gravação, pelas falhas | 75,25 | 79,75 |
+| Cassandra saudável pelo healthcheck | 75,9 | — |
+
+| Conferência, 10 s depois da carga | Execução de teste | Parada manual |
+| --- | ---: | ---: |
+| Contador | +18.000 | +18.000 |
+| Histórico | +8.978 | +8.384 |
+| Falhas | +9.022 | +9.616 |
+| Diferença entre o contador e o histórico | 9.022 | 9.616 |
+| Diferença menos as falhas | 0 | 0 |
+
+Na parada manual, os 9.950 envios da queda vista pela aplicação, dos 30 s aos 79,75 s, receberam `302`, com p95 no servidor de 3,526 ms. O script de reserva levou 3,7 s para parar o Cassandra e 21,0 s para religá-lo até o healthcheck.
+
+#### Critérios conferidos
+
+- **CA-6, na execução de teste:** enquanto o Cassandra esteve fora para a aplicação, dos 30 s aos 75,25 s, os 9.050 redirecionamentos responderam `302`, com p95 no servidor de 1,465 ms, abaixo dos 50 ms. Na mesma janela, o contador somou 9.050 e as falhas, 9.022. A diferença são os cliques gravados antes de o Cassandra recusar escritas, aos 30,1 s. A exibição das falhas na tela fica para a tela de testes (RM-32), e as 3 execuções, para a execução completa (RM-33). Por isso o CA-6 continua desmarcado na [SPEC-005](../docs/specs/SPEC-005-testes-de-stress.md#critérios-de-aceitação).
+- **Tempo real de volta:** o Cassandra voltou a aceitar conexões 14,6 s depois do religamento, e a aplicação voltou a gravar 0,7 s depois disso, aos 75,25 s, antes do fim da etapa. A janela de 30 s e a etapa de 90 s continuam valendo, e o aviso do ADR-0014 de que a volta poderia passar dos 30 s previstos foi verificado sem exigir decisão nova.
+
+#### Leitura
+
+- **A queda não mudou o redirecionamento.** O p95 no servidor ficou entre 1,4 e 1,6 ms nas três fases. O redirecionamento só lê o Redis, e a gravação do clique roda depois da resposta. Com o Cassandra fora, o driver falha cada gravação na hora (`NoHostAvailable`), sem esperar os 2 s do tempo limite.
+- **O Cassandra deixa de aceitar escritas assim que recebe o sinal de parada.** As falhas começaram aos 30,1 s, quase 6 s antes de o contêiner terminar de parar. Ele fecha a porta CQL na hora, o driver marca o nó como fora do ar, e as gravações seguintes falham sem chegar ao Cassandra. No log da API da execução de teste, as 9.022 falhas são `NoHostAvailable` sem nó tentado. Nas outras duas execuções, de uma a três das primeiras falhas trouxeram `Server is shutting down` ou a conexão fechada pelo Cassandra.
+- **A aplicação ficou 45 s sem gravar:** 30 s com o Cassandra parado e 15 s com ele subindo. Os 0,7 s entre a porta aberta e a volta da gravação vêm da espera de no máximo 2 s do driver entre as tentativas. Com as esperas padrão do driver, que dobram a cada tentativa, a conta, não medida, punha a volta por volta dos 100 s, depois do fim da etapa.
+- **A diferença entre o contador e o histórico foi exatamente o número de falhas** nas duas execuções: nenhuma escrita falhou na aplicação e foi concluída no Cassandra, e nenhum incremento se perdeu.
+- **Primeira execução.** Uma execução anterior, às 01h22, rodou antes de a sondagem da porta ganhar uma thread própria, e as leituras das falhas e do contador travaram por 3 a 4 s de cada vez com o Cassandra parado. Ela também cumpriu o CA-6, com p95 no servidor de 6,5 ms na queda, e teve a mesma forma de volta: porta aberta aos 74,25 s, gravação aos 75,75 s e diferença igual às falhas (9.114). A latência dela já era maior antes da parada (p95 de 5,9 ms de 0 a 30 s), e por isso não veio da queda.
+- **Medição de desenvolvimento.** Os números são do computador de desenvolvimento, com outros programas abertos. As 3 execuções que valem para o CA-6 rodam na máquina da apresentação, na execução completa (CA-4).

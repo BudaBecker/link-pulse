@@ -1,4 +1,4 @@
-"""Mede as quatro operações e o pico nos dois lados com o gerador de carga (SPEC-005, passos 2 e 4).
+"""Mede as quatro operações, o pico e a queda do Cassandra com o gerador de carga (SPEC-005, passos 2, 4 e 5).
 
 Roda no próprio computador, como o base.py, e chama benchmark/gerador.py no
 contêiner `gerador` para cada operação e cada lado, um de cada vez. Restaura a
@@ -8,10 +8,13 @@ depois do histórico, que não escreve, e não restaura de novo. Com
 --sem-restaurar, não restaura em momento nenhum. Usa a trava
 do base.py: nenhum comando da base roda no meio. Os argumentos são validados
 aqui, antes da trava. Na janela medida, lê também a CPU dos bancos exercitados.
+Na queda do Cassandra, a última etapa, sobe a API no computador com o Python do
+.venv e roda benchmark/queda.py no contêiner `gerador-queda` (Q-62).
 
     python benchmark/medir.py
     python benchmark/medir.py --operacoes contador registro --lados postgres --duracao 20 --aquecimento 5
     python benchmark/medir.py --operacoes pico
+    python benchmark/medir.py --operacoes queda
 
 O resultado vai para benchmark/registros/, fora do Git. Detalhes em benchmark/README.md.
 """
@@ -24,16 +27,19 @@ import math
 import subprocess
 import sys
 import time
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 
 from base import (
-    COMPOSE, ROTULO_AUXILIAR, Trava, cmd_restaurar, conteiner, exigir_bancos_no_ar, exigir_volumes_de_benchmark,
-    manifesto_da_base, registrar, rodar,
+    COMPOSE, RAIZ, REGISTROS, ROTULO_AUXILIAR, Trava, cmd_restaurar, conteiner, exigir_bancos_no_ar,
+    exigir_volumes_de_benchmark, manifesto_da_base, registrar, rodar,
 )
 # As mesmas de gerador.py, que não é importado: ele usa os drivers dos bancos.
 OPERACOES = ("redirecionamento", "contador", "registro", "historico")
 PICO = "pico"
-ETAPAS = (*OPERACOES, PICO)  # a ordem da sequência de testes
+QUEDA = "queda"
+ETAPAS = (*OPERACOES, PICO, QUEDA)  # a ordem da sequência de testes
 LADOS = ("nosql", "postgres")
 ESCRITAS = ("contador", "registro", PICO)
 NOMES = {"nosql": "NoSQL", "postgres": "PostgreSQL"}
@@ -98,6 +104,76 @@ def executar(operacao: str, lado: str, conexoes: int, args: argparse.Namespace) 
     return resultado
 
 
+PORTA_API = 8001  # própria do cenário, fora da 8000 da demonstração (Q-62)
+PRAZO_API = 60  # s para a API responder depois de subir
+
+
+def python_do_venv() -> str:
+    for caminho in (RAIZ / ".venv" / "Scripts" / "python.exe", RAIZ / ".venv" / "bin" / "python"):
+        if caminho.exists():
+            return str(caminho)
+    sys.exit("a queda do Cassandra sobe a API com o Python do .venv, que não existe; veja app/README.md")
+
+
+def subir_api(log) -> subprocess.Popen:
+    """A API no computador, como na demonstração, pelo envoltório que mede o tempo no servidor (Q-62, Q-63)."""
+    api = subprocess.Popen(
+        [python_do_venv(), "-m", "uvicorn", "benchmark.api_cronometrada:app", "--port", str(PORTA_API),
+         "--no-access-log"], cwd=RAIZ, stdout=log, stderr=subprocess.STDOUT)
+    limite = time.monotonic() + PRAZO_API
+    while time.monotonic() < limite:
+        if api.poll() is not None:
+            sys.exit(f"a API saiu com código {api.returncode} ao subir; veja {log.name}")
+        try:
+            urllib.request.urlopen(f"http://127.0.0.1:{PORTA_API}/metricas", timeout=1).read()
+            return api
+        except OSError:
+            time.sleep(0.5)
+    api.terminate()
+    sys.exit(f"a API não respondeu em {PRAZO_API} s; veja {log.name}")
+
+
+def executar_queda(args: argparse.Namespace) -> dict:
+    comando = [*COMPOSE, "run", "--rm", "--no-deps", "--label", f"{ROTULO_AUXILIAR}=medir", "gerador-queda",
+               "python", "benchmark/queda.py", "--api", f"http://host.docker.internal:{PORTA_API}",
+               "--cassandra", conteiner("cassandra")]
+    if args.queda_manual:
+        comando.append("--queda-manual")
+    REGISTROS.mkdir(exist_ok=True)
+    caminho_log = REGISTROS / f"queda-api-{datetime.now():%Y%m%d-%H%M%S}.log"
+    resultado = None
+    with open(caminho_log, "w", encoding="utf-8") as log:
+        api = subir_api(log)
+        try:
+            with subprocess.Popen(comando, stdout=subprocess.PIPE, text=True, encoding="utf-8") as gerador:
+                for linha in gerador.stdout:
+                    if linha.startswith("RESULTADO "):
+                        resultado = json.loads(linha.removeprefix("RESULTADO "))
+                    else:
+                        print("  " + linha, end="")
+        finally:
+            api.terminate()
+            api.wait()
+    if gerador.returncode or resultado is None:
+        raise subprocess.CalledProcessError(gerador.returncode or 1, comando)
+    resultado["log_da_api"] = caminho_log.relative_to(RAIZ).as_posix()
+    resumo_da_queda(resultado)
+    return resultado
+
+
+def resumo_da_queda(r: dict) -> None:
+    q, c, m = r["queda"], r["conferencia"], r["marcos"]
+    print(f"  queda vista pela aplicação: de {q['janela_s'][0]:.0f} a {q['janela_s'][1]:.1f} s"
+          + ("" if q["gravacao_voltou_na_etapa"] else " (a gravação não voltou na etapa)"))
+    print(f"  {q['respostas_302']:,} de {q['envios']:,} envios com 302 · p95 no servidor {q['p95_servidor_ms']} ms · "
+          f"p95 no gerador {q['p95_gerador_ms']} ms · contador +{q['contador_somou']} · falhas +{q['falhas_somaram']}")
+    print("  marcos (s): " + " · ".join(f"{k.removesuffix('_s')} {v}" for k, v in m.items()))
+    print(f"  conferência: contador +{c['contador']:,} · histórico +{c['historico']:,} · falhas +{c['falhas']:,} · "
+          f"diferença {c['diferenca_contador_historico']:,} (diferença menos falhas: {c['diferenca_menos_falhas']})")
+    print(f"  CA-6 nesta execução: {'cumprido' if q['ca6'] else 'NÃO cumprido'} · CPU do gerador "
+          f"{r['cpu_gerador_nucleos']} núcleos ({r['cpu_gerador_pct']}%)")
+
+
 def linhas_de_operacao(execucao: dict) -> list[tuple[str, dict]]:
     """Uma linha por operação: no pico, as três; nas outras etapas, a própria."""
     if "por_operacao" in execucao:
@@ -115,6 +191,9 @@ def taxa(valor: float | None) -> str:
 
 
 def tabela(execucoes: list[dict]) -> None:
+    execucoes = [e for e in execucoes if e["operacao"] != QUEDA]  # a queda tem resumo próprio
+    if not execucoes:
+        return
     print("\n| Conexões | Operação | Lado | Vazão (ops/s) | p50 (ms) | p95 (ms) | p99 (ms) | Sucessos | Erros "
           "| Taxa de erro | CPU do gerador | CPU dos bancos | Memória do gerador (MiB) |")
     print("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |")
@@ -144,6 +223,11 @@ def sequencia(args: argparse.Namespace, conexoes: int, dados: dict) -> None:
             print(f"Restaurando a base antes do {'histórico por período' if operacao == 'historico' else 'pico'}")
             dados["restauracoes"].append(cmd_restaurar(conferir=True))
             houve_escrita = False
+        if operacao == QUEDA:  # só o lado NoSQL, pela aplicação, sobre o estado em que o pico deixou a base
+            if "nosql" in args.lados:
+                print("\nqueda do Cassandra / NoSQL, pela aplicação")
+                dados["execucoes"].append(executar_queda(args))
+            continue
         for lado in [l for l in LADOS if l in args.lados]:
             print(f"\n{operacao} / {NOMES[lado]}, {conexoes} conexões")
             dados["execucoes"].append(executar(operacao, lado, conexoes, args))
@@ -171,12 +255,14 @@ def argumentos_de_duracao(parser: argparse.ArgumentParser) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--operacoes", nargs="+", choices=ETAPAS, default=list(ETAPAS),
-                        help="etapas a medir; padrão: as quatro operações e o pico")
+                        help="etapas a medir; padrão: as quatro operações, o pico e a queda do Cassandra")
     parser.add_argument("--lados", nargs="+", choices=LADOS, default=list(LADOS))
     parser.add_argument("--conexoes", type=positivo(int), default=8, help="padrão 8, o número escolhido pela calibração")
     argumentos_de_duracao(parser)
     parser.add_argument("--sem-restaurar", action="store_true",
                         help="mede sobre o estado atual da base, sem restaurar em momento nenhum")
+    parser.add_argument("--queda-manual", action="store_true",
+                        help="na queda, não mexe no Docker: avisa a hora de rodar benchmark/queda_manual.py")
     args = parser.parse_args()
 
     dados = {"parametros": vars(args), "restauracoes": [], "execucoes": []}
