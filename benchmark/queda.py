@@ -44,7 +44,6 @@ ATRASO_TOLERADO = 0.005  # s; um envio que sai depois disso conta como atrasado
 INTERVALO_LEITURA = 0.25  # s, entre as leituras das falhas e do contador, e entre as sondagens da porta
 ESPERA_FINAL = 10.0  # s depois da carga, cinco vezes o tempo limite da gravação (Q-41, Q-67)
 PRAZO_VOLTA = 60.0  # s sem carga esperando o Cassandra, se ele não voltou na etapa (Q-66)
-SEM_FALHA_PARA_VOLTA = 2.0  # s de carga sem falha nova para considerar que a gravação voltou
 TETO_P95_MS = 50.0  # RNF-02
 FASES = {"antes": (0.0, PARADA), "parado": (PARADA, RELIGAMENTO), "volta": (RELIGAMENTO, DURACAO)}
 
@@ -237,22 +236,17 @@ def controlar(docker: Docker | None, conteiner: str, partida: float, marcos: dic
         time.sleep(0.5)
 
 
-def volta_da_gravacao(amostras: list[dict], d: Disparo) -> float | None:
-    """Última leitura, durante a carga, em que as falhas aumentaram; None se a gravação não voltou na etapa.
+def ultima_falha(amostras: list[dict]) -> float | None:
+    """Última leitura, durante a carga, em que as falhas aumentaram.
 
-    A gravação voltou se essa leitura veio depois do religamento e se, depois dela, a carga seguiu por
-    SEM_FALHA_PARA_VOLTA sem falha nova e com respostas `302`, isto é, gerando cliques. Sem a segunda
-    condição, redirecionamentos que deixaram de responder `302` pareceriam a volta do Cassandra.
+    Não prova a volta: uma leitura ausente esconderia falhas. A prova é o primeiro clique gravado no Cassandra.
     """
     durante = [a for a in amostras if a["t"] <= DURACAO and a["falhas"] is not None]
     ultima = None
     for anterior, atual in zip(durante, durante[1:]):
         if atual["falhas"] > anterior["falhas"]:
             ultima = atual["t"]
-    if ultima is None or ultima < RELIGAMENTO or DURACAO - ultima < SEM_FALHA_PARA_VOLTA:
-        return None
-    depois = metricas(d, ultima, ultima + SEM_FALHA_PARA_VOLTA)
-    return ultima if depois["envios"] and depois["respostas_302"] == depois["envios"] else None
+    return ultima
 
 
 def leitura_em(amostras: list[dict], t: float, campo: str) -> int | None:
@@ -330,12 +324,16 @@ def cliques_no_historico(codigo: str, desde: datetime, parada: datetime | None) 
 
 
 def esperar_cassandra(docker: Docker | None, conteiner: str, marcos: dict, partida: float) -> bool:
-    """Sem a volta na etapa, espera o Cassandra por até PRAZO_VOLTA, sem carga, para a conferência (Q-66)."""
+    """Depois da carga, espera o Cassandra por até PRAZO_VOLTA, sem carga, para a conferência (Q-66).
+
+    Na parada manual não há healthcheck consultado: vale a porta CQL, já registrada pela sondagem.
+    """
     limite = time.perf_counter() + PRAZO_VOLTA
     while time.perf_counter() < limite:
         pronto = docker.saude(conteiner) == "healthy" if docker else porta_aberta()
         if pronto:
-            marcos.setdefault("saudavel_s", round(time.perf_counter() - partida, 3))
+            if docker:
+                marcos.setdefault("saudavel_s", round(time.perf_counter() - partida, 3))
             return True
         time.sleep(0.5)
     return False
@@ -391,14 +389,10 @@ def main() -> int:
     fim_da_carga = round(relogio_depois - partida, 3)
     print(f"[{fim_da_carga:5.1f} s] fim da carga", flush=True)
 
-    volta = volta_da_gravacao(leituras.amostras, disparo)
-    cassandra_no_ar = True
-    if volta is None:
-        print("A gravação dos cliques não voltou na etapa; esperando o Cassandra, sem carga", flush=True)
-        cassandra_no_ar = esperar_cassandra(docker, args.cassandra, marcos, partida)
-        if not cassandra_no_ar:
-            print(f"O Cassandra não voltou em {PRAZO_VOLTA:.0f} s depois da carga; o resultado sai sem a "
-                  "conferência do histórico", flush=True)
+    cassandra_no_ar = esperar_cassandra(docker, args.cassandra, marcos, partida)
+    if not cassandra_no_ar:
+        print(f"O Cassandra não voltou em {PRAZO_VOLTA:.0f} s depois da carga; o resultado sai sem a "
+              "conferência do histórico", flush=True)
     time.sleep(ESPERA_FINAL)
     controle.join(timeout=PRAZO_VOLTA)
     leituras.parar.set()
@@ -407,17 +401,24 @@ def main() -> int:
     depois = leituras.ler(partida)
 
     fechada, aberta = transicoes_da_porta(sondagens)
-    marcos |= {"porta_fechada_s": fechada, "porta_aberta_s": aberta, "gravacao_voltou_s": volta}
+    ultima = ultima_falha(leituras.amostras)
+    marcos |= {"porta_fechada_s": fechada, "porta_aberta_s": aberta, "ultima_falha_s": ultima}
     parada_concluida = marcos.get("parada_concluida_s", fechada)
     instante = lambda t: None if t is None else inicio + timedelta(seconds=t)  # noqa: E731
     historico, primeiro = None, None
     if cassandra_no_ar:
         historico, primeiro = cliques_no_historico(codigo, inicio - timedelta(seconds=0.5),
                                                    instante(parada_concluida))
-    if primeiro is not None:
-        marcos["primeiro_clique_gravado_apos_parada_s"] = round((primeiro - inicio).total_seconds(), 3)
+    primeiro_s = None if primeiro is None else round((primeiro - inicio).total_seconds(), 3)
+    marcos["primeiro_clique_gravado_apos_parada_s"] = primeiro_s
+    # A volta é o primeiro clique gravado depois da parada, dentro da carga; sem ele, a janela vai até o fim.
+    # A janela inclui as falhas que ainda vieram depois dele, enquanto o driver terminava de reconectar (Q-68).
+    volta = primeiro_s if primeiro_s is not None and primeiro_s < DURACAO else None
+    marcos["gravacao_voltou_s"] = volta
+    if volta is None:
+        print("A gravação dos cliques não voltou na etapa", flush=True)
 
-    fim_da_queda = volta if volta is not None else DURACAO
+    fim_da_queda = DURACAO if volta is None else max(volta, ultima or volta)
     queda = metricas(disparo, PARADA, fim_da_queda)
     contador_na_queda = [leitura_em(leituras.amostras, t, "contador") for t in (PARADA, fim_da_queda)]
     falhas_na_queda = [leitura_em(leituras.amostras, t, "falhas") for t in (PARADA, fim_da_queda)]

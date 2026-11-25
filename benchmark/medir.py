@@ -179,20 +179,22 @@ def executar_queda(args: argparse.Namespace) -> dict:
     return resultado
 
 
+def numero(valor, sinal: str = "") -> str:
+    """Um campo da queda que pode faltar, quando a leitura não respondeu ou o Cassandra não voltou."""
+    return "indisponível" if valor is None else f"{sinal}{valor:,}"
+
+
 def resumo_da_queda(r: dict) -> None:
     q, c, m = r["queda"], r["conferencia"], r["marcos"]
     print(f"  queda vista pela aplicação: de {q['janela_s'][0]:.0f} a {q['janela_s'][1]:.1f} s"
           + ("" if q["gravacao_voltou_na_etapa"] else " (a gravação não voltou na etapa)"))
     print(f"  {q['respostas_302']:,} de {q['envios']:,} envios com 302 · p95 no servidor {q['p95_servidor_ms']} ms · "
-          f"p95 no gerador {q['p95_gerador_ms']} ms · contador +{q['contador_somou']} · falhas +{q['falhas_somaram']}")
+          f"p95 no gerador {q['p95_gerador_ms']} ms · contador {numero(q['contador_somou'], '+')} · "
+          f"falhas {numero(q['falhas_somaram'], '+')}")
     print("  marcos (s): " + " · ".join(f"{k.removesuffix('_s')} {v}" for k, v in m.items()))
-    if c["historico"] is None:
-        print(f"  conferência: contador +{c['contador']} · falhas +{c['falhas']} · histórico indisponível, "
-              "porque o Cassandra não voltou a tempo")
-    else:
-        print(f"  conferência: contador +{c['contador']:,} · histórico +{c['historico']:,} · falhas +{c['falhas']:,} · "
-              f"diferença {c['diferenca_contador_historico']:,} "
-              f"(diferença menos falhas: {c['diferenca_menos_falhas']})")
+    print(f"  conferência: contador {numero(c['contador'], '+')} · histórico {numero(c['historico'], '+')} · "
+          f"falhas {numero(c['falhas'], '+')} · diferença {numero(c['diferenca_contador_historico'])} "
+          f"(diferença menos falhas: {numero(c['diferenca_menos_falhas'])})")
     print(f"  CA-6 nesta execução: {'cumprido' if q['ca6'] else 'NÃO cumprido'} · CPU do gerador "
           f"{r['cpu_gerador_nucleos']} núcleos ({r['cpu_gerador_pct']}%)")
 
