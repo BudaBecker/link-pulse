@@ -145,6 +145,11 @@ def conectar_postgres(operacoes: tuple[str, ...], janela, curva_extra: bool = Fa
     return {o: executores[o] for o in operacoes}
 
 
+def segundos_da_carga(args: argparse.Namespace) -> int:
+    """Segundos com PARCIAL; calculado pelos argumentos, e não por `marcos`, para filhos e juntador concordarem."""
+    return math.ceil(args.aquecimento + args.duracao)
+
+
 def processo(numero: int, conexoes: int, args: argparse.Namespace, popular: str, outros: list[str],
              janela, prontos, partida, marcos, saida, parciais) -> None:
     try:
@@ -195,8 +200,8 @@ def processo(numero: int, conexoes: int, args: argparse.Namespace, popular: str,
 
     def relatar() -> None:
         """A cada segundo, junta o que as conexões concluíram nele e manda ao processo principal."""
-        origem, fim = marcos[2], marcos[1]
-        for s in range(math.ceil(fim - origem)):
+        origem = marcos[2]
+        for s in range(segundos_da_carga(args)):
             time.sleep(max(0.0, origem + s + 1 + FOLGA_PARCIAL - time.perf_counter()))
             junto: dict = {}
             for por_segundo in segundos:
@@ -354,7 +359,7 @@ def main() -> int:
     inicio = datetime.now(UTC)
     serie: list[dict] = []
     juntador = threading.Thread(target=juntar_parciais, daemon=True, args=(
-        parciais, processos, CICLO[args.operacao], math.ceil(args.aquecimento + args.duracao), serie))
+        parciais, processos, CICLO[args.operacao], segundos_da_carga(args), serie))
     juntador.start()
     partida.set()
     emitir("PARTIDA")

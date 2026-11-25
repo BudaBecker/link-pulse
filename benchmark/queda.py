@@ -125,15 +125,17 @@ class Disparo:
                 conexao.request("GET", self.rota)
                 resposta = conexao.getresponse()
                 resposta.read()
-                self.status[i] = resposta.status
+                # total e servidor antes do status: o PARCIAL lê como respondido quem já tem status.
+                self.total[i] = time.perf_counter() - partida - self.agendado[i]
                 self.servidor[i] = tempo_do_servidor(resposta.getheader("server-timing"))
+                self.status[i] = resposta.status
             except (OSError, http.client.HTTPException) as erro:
+                self.total[i] = time.perf_counter() - partida - self.agendado[i]
                 if conexao is not None:
                     conexao.close()
                 conexao = None
                 if len(self.exemplos_de_erro) < 3:
                     self.exemplos_de_erro.append(f"{type(erro).__name__}: {erro}"[:200])
-            self.total[i] = time.perf_counter() - partida - self.agendado[i]
 
     def rodar(self, partida: float) -> None:
         workers = [threading.Thread(target=self.worker, args=(partida,)) for _ in range(WORKERS)]
