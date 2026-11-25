@@ -18,6 +18,7 @@ const estado = {
   codigo: "",
   historico: null,
   falhou: false,
+  divergente: false,
 };
 let consultaAtiva;
 let assinaturaLinks;
@@ -80,6 +81,7 @@ function definirLink(codigo) {
   if (estado.codigo === codigo) return;
   estado.codigo = codigo;
   estado.historico = null;
+  estado.divergente = false;
   elemento("detalhes-link").open = false;
   limparRetornoCopia();
 }
@@ -129,6 +131,7 @@ async function carregarContexto(sinal) {
 
 async function carregarHistorico(sinal) {
   const historico = await buscarHistorico(requisitar, estado.codigo, estado.clienteId, sinal);
+  estado.divergente = !historico;
   if (historico) estado.historico = historico;
 }
 
@@ -285,8 +288,11 @@ function renderizar() {
   const aviso = elemento("aviso");
   const { historico } = estado;
   const mantendoDados = historico ? " O histórico anterior continua visível." : "";
-  aviso.hidden = !estado.falhou;
-  exibirTexto(aviso, estado.falhou ? `Falha ao atualizar os dados.${mantendoDados} A tela tenta novamente em instantes.` : "");
+  let textoAviso = "";
+  if (estado.falhou) textoAviso = `Falha ao atualizar os dados.${mantendoDados} A tela tenta novamente em instantes.`;
+  else if (estado.divergente) textoAviso = `Os cliques mudaram durante a leitura.${mantendoDados} A tela tenta novamente em instantes.`;
+  aviso.hidden = !textoAviso;
+  exibirTexto(aviso, textoAviso);
   const link = linkEscolhido();
   for (const id of ["cabecalho-link", "resumo", "dia", "dispositivos", "canais"]) elemento(id).hidden = !link;
   elemento("estado-vazio").hidden = Boolean(link);
@@ -299,7 +305,10 @@ function renderizar() {
     elemento(`dados-${id}`).hidden = !historico;
     const mensagem = elemento(`estado-${id}`);
     mensagem.hidden = Boolean(historico);
-    exibirTexto(mensagem, estado.falhou ? "Cliques indisponíveis no momento." : "Carregando cliques…");
+    let textoEstado = "Carregando cliques…";
+    if (estado.falhou) textoEstado = "Cliques indisponíveis no momento.";
+    else if (estado.divergente) textoEstado = "Os cliques mudaram durante a leitura. Tentando de novo…";
+    exibirTexto(mensagem, textoEstado);
   }
   if (historico && historico !== historicoExibido) {
     renderizarGraficos(historico);
