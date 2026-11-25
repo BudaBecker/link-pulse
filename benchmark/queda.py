@@ -412,7 +412,8 @@ def main() -> int:
     primeiro_s = None if primeiro is None else round((primeiro - inicio).total_seconds(), 3)
     marcos["primeiro_clique_gravado_apos_parada_s"] = primeiro_s
     # A volta é o primeiro clique gravado depois da parada, dentro da carga; sem ele, a janela vai até o fim.
-    # A janela inclui as falhas que ainda vieram depois dele, enquanto o driver terminava de reconectar (Q-68).
+    # A janela vai até a leitura que detectou o último aumento das falhas, se ela vier depois: com leituras a
+    # cada 0,25 s, a falha pode ser anterior ou posterior ao clique (Q-68).
     volta = primeiro_s if primeiro_s is not None and primeiro_s < DURACAO else None
     marcos["gravacao_voltou_s"] = volta
     if volta is None:
