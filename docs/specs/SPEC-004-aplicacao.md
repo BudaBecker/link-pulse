@@ -59,6 +59,7 @@ Os dados e as chaves estão em [ARQUITETURA](../arquitetura/ARQUITETURA.md) Pass
 5. Depois da resposta, executa `INCR contador:{short_code}` no master e grava o evento em `cliques_por_link`, de forma assíncrona e com tempo limite de 2 s (Q-41).
 6. O evento leva `short_code`, `clicado_em`, `clique_id`, `dispositivo` (derivado do cabeçalho `User-Agent`: `mobile`, `desktop`, `tablet` ou `outro`, que inclui bots e User-Agent ausente) e `referrer`. O campo `pais` fica vazio.
 7. Se a gravação do evento falhar, o clique é descartado, a falha é registrada em log e soma em um contador de falhas, guardado na memória da aplicação e exposto em `GET /metricas` como `{"falhas_gravacao_clique": n}` (Q-42). A resposta já enviada não muda.
+8. Depois de uma queda do Cassandra, o driver reconecta sozinho, com no máximo 2 s entre as tentativas e sem desistir, para a gravação voltar logo depois do Cassandra (Q-66).
 
 ### Consultas e painel
 
