@@ -159,3 +159,29 @@ def test_clique_chega_a_tela_publicada_em_ate_60_s_com_cliques_continuos():
     primeira = next(p for p in publicacoes if p["total"] >= cliques_ate_o_marcado)
     assert primeira["em"] - marcado < PRAZO_RNF_03 * 1000
     assert len(publicacoes) == 90_000 // (intervalo_de_atualizacao() * 1000)
+
+
+DIAS_ATE_24 = [{"dia": f"2026-11-{dia}", "cliques": 0} for dia in range(18, 25)]
+
+
+def rotulos_exibidos(agora: str) -> list[str]:
+    return [r["texto"] for r in rodar("rotulosDosDias", [DIAS_ATE_24, f"data:{agora}"], {})["resultado"]]
+
+
+def test_a_barra_de_hoje_leva_o_sufixo():
+    assert rotulos_exibidos("2026-11-24T18:00:00Z") == [f"{dia}/11" for dia in range(18, 24)] + ["24/11 · Hoje"]
+
+
+@pytest.mark.parametrize(
+    "agora",
+    [
+        "2026-11-25T03:00:03Z",  # 00:00:03 de 25/11: a janela ainda fecha em 24/11
+        "2026-11-25T13:00:00Z",  # histórico de 24/11 mantido depois de uma falha
+    ],
+    ids=["janela-de-ontem", "historico-mantido"],
+)
+def test_depois_da_meia_noite_a_barra_de_ontem_nao_e_hoje(agora):
+    janela = rodar("janelaDosSeteDias", ["data:2026-11-25T03:00:03Z"], {})["resultado"]
+
+    assert janela["rotulo"] == "18/11 a 24/11"
+    assert rotulos_exibidos(agora) == [f"{dia}/11" for dia in range(18, 25)]

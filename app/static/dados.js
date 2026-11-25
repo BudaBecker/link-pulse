@@ -1,7 +1,8 @@
 const FUSO_BRASILIA = "America/Sao_Paulo";
 const TENTATIVAS_COERENTES = 3;
-// Maior que os 2 s de tempo limite da gravação (Q-41): até o fim da janela, todo clique já
-// foi gravado ou descartado, e as quatro consultas veem o mesmo conjunto (Q-57).
+// Maior que os 2 s de tempo limite da gravação (Q-41), reduz as divergências entre as quatro
+// consultas; o Cassandra ainda pode aplicar um INSERT depois desse tempo, e quem decide se
+// publica é a conferência de buscarHistorico (Q-56, Q-57).
 const MARGEM_DA_JANELA_MS = 5000;
 const diaBrasilia = new Intl.DateTimeFormat("pt-BR", {
   timeZone: FUSO_BRASILIA, year: "numeric", month: "2-digit", day: "2-digit",
@@ -15,11 +16,23 @@ function exibirDia(iso) {
   return diaCurto.format(new Date(`${iso}T12:00:00Z`));
 }
 
+const SUFIXO_HOJE = " · Hoje";
+
+// Nos primeiros segundos do dia, a janela ainda fecha ontem (Q-57) e nenhuma barra é de hoje.
+function rotulosDosDias(dias, agora = new Date()) {
+  const hoje = diaEmBrasilia(agora);
+  return dias.map(({ dia }) => ({ texto: `${exibirDia(dia)}${dia === hoje ? SUFIXO_HOJE : ""}`, hoje: dia === hoje }));
+}
+
+function diaEmBrasilia(momento) {
+  const partes = Object.fromEntries(diaBrasilia.formatToParts(momento).map(({ type, value }) => [type, value]));
+  return `${partes.year}-${partes.month}-${partes.day}`;
+}
+
 function janelaDosSeteDias(agora = new Date()) {
   const fechamento = new Date(agora.getTime() - MARGEM_DA_JANELA_MS);
-  const partes = Object.fromEntries(diaBrasilia.formatToParts(fechamento).map(({ type, value }) => [type, value]));
-  const hoje = `${partes.year}-${partes.month}-${partes.day}`;
-  const seisDiasAtras = new Date(`${hoje}T12:00:00Z`);
+  const ultimoDia = diaEmBrasilia(fechamento);
+  const seisDiasAtras = new Date(`${ultimoDia}T12:00:00Z`);
   // A aritmética em UTC desloca a data civil sem depender do fuso do computador.
   seisDiasAtras.setUTCDate(seisDiasAtras.getUTCDate() - 6);
   const primeiroDia = seisDiasAtras.toISOString().slice(0, 10);
@@ -28,7 +41,7 @@ function janelaDosSeteDias(agora = new Date()) {
   return {
     inicio: `${primeiroDia}T00:00:00.000${deslocamento(primeiroDia)}`,
     fim: fechamento.toISOString(),
-    rotulo: `${exibirDia(primeiroDia)} a ${exibirDia(hoje)}`,
+    rotulo: `${exibirDia(primeiroDia)} a ${exibirDia(ultimoDia)}`,
   };
 }
 

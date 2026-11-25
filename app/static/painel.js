@@ -24,6 +24,7 @@ let consultaAtiva;
 let assinaturaLinks;
 let assinaturaCampanhas;
 let historicoExibido;
+let diaExibido;
 let tempoRetornoCopia;
 
 const elemento = (id) => document.getElementById(id);
@@ -310,9 +311,12 @@ function renderizar() {
     else if (estado.divergente) textoEstado = "Os cliques mudaram durante a leitura. Tentando de novo…";
     exibirTexto(mensagem, textoEstado);
   }
-  if (historico && historico !== historicoExibido) {
+  // Na virada do dia, um histórico mantido depois de uma falha precisa perder o "Hoje".
+  const hoje = diaEmBrasilia(new Date());
+  if (historico && (historico !== historicoExibido || hoje !== diaExibido)) {
     renderizarGraficos(historico);
     historicoExibido = historico;
+    diaExibido = hoje;
   }
 }
 
@@ -360,7 +364,8 @@ const trilhasCanais = {
 const opcoesGraficos = { animation: false, maintainAspectRatio: false, locale: "pt-BR" };
 
 function renderizarPorDia(dias) {
-  const rotulos = dias.map(({ dia }, indice) => `${exibirDia(dia)}${indice === dias.length - 1 ? " · Hoje" : ""}`);
+  const marcados = rotulosDosDias(dias);
+  const rotulos = marcados.map(({ texto }) => texto);
   const tabela = elemento("tabela-dia");
   tabela.tBodies[0].replaceChildren(...dias.map(({ cliques }, indice) => {
     const linha = criarElemento("tr");
@@ -380,7 +385,7 @@ function renderizarPorDia(dias) {
       datasets: [{
         label: "Cliques",
         data: dias.map(({ cliques }) => cliques),
-        backgroundColor: dias.map((_, indice) => cor(indice === dias.length - 1 ? "--destaque" : "--grafico-barra")),
+        backgroundColor: marcados.map(({ hoje }) => cor(hoje ? "--destaque" : "--grafico-barra")),
         borderRadius: 6,
         maxBarThickness: 76,
       }],
@@ -393,7 +398,8 @@ function renderizarPorDia(dias) {
           grid: { display: false },
           ticks: {
             autoSkip: false, maxRotation: 0,
-            color: ({ index }) => cor(index === dias.length - 1 ? "--destaque" : "--secundario"),
+            // As opções ficam da criação do gráfico; o rótulo de cada ciclo diz qual barra é hoje.
+            color: ({ chart, index }) => cor(chart.data.labels[index]?.endsWith(SUFIXO_HOJE) ? "--destaque" : "--secundario"),
           },
         },
         y: { beginAtZero: true, suggestedMax: 1, grace: "10%", ticks: { precision: 0 }, grid: { color: cor("--grafico-grade") } },
