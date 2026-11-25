@@ -10,9 +10,9 @@ import pytest
 import redis
 from fastapi.testclient import TestClient
 
+from app.main import abrir_replica
+from app.tests.conftest import cita_marcador
 from app.tests.test_redirecionamento import URL, acessar, criar_link
-
-pytestmark = pytest.mark.quedas
 
 COMPOSE = ["docker", "compose", "-f", str(Path(__file__).parents[2] / "docker-compose.yml")]
 PEDIDOS_P95 = 200  # Q-59
@@ -69,6 +69,26 @@ def p95(tempos: list[float]) -> float:
     return sorted(tempos)[math.ceil(0.95 * len(tempos)) - 1]
 
 
+@pytest.mark.parametrize(
+    ("expressao", "seleciona"),
+    [
+        ("quedas", True),
+        ("quedas or not quedas", True),
+        ("(quedas)", True),
+        ("not quedas", True),  # cita o marcador; o próprio -m deixa os testes de fora
+        ("", False),
+        ("not slow", False),
+        ("not skipif(reason='quedas')", False),
+        ('not skipif(reason="quedas")', False),
+        ("not skipif(quedas=1)", False),
+        ("quedas_lentas or quedas-x or a.quedas", False),
+    ],
+)
+def test_so_o_marcador_quedas_seleciona_os_testes_de_queda(expressao, seleciona):
+    assert cita_marcador(expressao, "quedas") is seleciona
+
+
+@pytest.mark.quedas
 def test_ca11_replica_parada_redireciona(api, replica):
     codigo = criar_link(api)
     cronometro = Cronometro(api.app)
@@ -77,8 +97,11 @@ def test_ca11_replica_parada_redireciona(api, replica):
     esperar(lambda: replica.exists(f"link:{codigo}") == 1, prazo=5)
 
     with parado("redis-replica"):
+        # Uma conexão à parte: o cliente da aplicação continua com a conexão que a queda interrompeu.
+        sonda = abrir_replica()
         with pytest.raises(redis.RedisError):
-            replica.ping()
+            sonda.ping()
+        sonda.close()
 
         respostas = [acessar(api_cronometrada, codigo) for _ in range(5)]
 
@@ -88,6 +111,7 @@ def test_ca11_replica_parada_redireciona(api, replica):
     assert max(cronometro.tempos) < 1.0  # Q-61
 
 
+@pytest.mark.quedas
 def test_ca14_cassandra_parado_redireciona_rapido_e_conta_falhas(api, master, sessao_cassandra):
     codigo = criar_link(api)
     cronometro = Cronometro(api.app)

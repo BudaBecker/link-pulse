@@ -22,10 +22,17 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "quedas: para e religa contêineres do Compose; rode com -m quedas (Q-58)")
 
 
+def cita_marcador(expressao: str, nome: str) -> bool:
+    # Textos entre aspas e nomes de argumento, como em skipif(reason='quedas'), não são marcadores.
+    sem_argumentos = re.sub(r"'[^']*'|\"[^\"]*\"|\w+\s*=", " ", expressao)
+    # Os mesmos caracteres que o pytest aceita num nome de marcador.
+    return re.search(rf"(?<![\w:+\-.\[\]\\/]){re.escape(nome)}(?![\w:+\-.\[\]\\/])", sem_argumentos) is not None
+
+
 def pytest_collection_modifyitems(config, items):
-    # Os testes de queda param bancos que a demonstração usa: só rodam quando o -m cita "quedas",
+    # Os testes de queda param bancos que a demonstração usa: só rodam quando o -m cita o marcador,
     # e não com outro filtro, como -m "not slow".
-    if re.search(r"\bquedas\b", config.option.markexpr or ""):
+    if cita_marcador(config.option.markexpr or "", "quedas"):
         return
     fora = [item for item in items if item.get_closest_marker("quedas")]
     if fora:
