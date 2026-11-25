@@ -15,6 +15,10 @@ CONTAR_CLIQUES = (
 INSTANTES_DOS_CLIQUES = (
     "SELECT clicado_em FROM cliques_por_link WHERE short_code = ? AND clicado_em >= ? AND clicado_em <= ?"
 )
+DISPOSITIVOS_DOS_CLIQUES = (
+    "SELECT dispositivo FROM cliques_por_link WHERE short_code = ? AND clicado_em >= ? AND clicado_em <= ?"
+)
+DISPOSITIVOS = ("mobile", "desktop", "tablet", "outro")
 
 
 class LinkInexistente(Exception):
@@ -26,6 +30,7 @@ class ConsultasDeCliques:
         self._sessao = sessao
         self._contar = sessao.prepare(CONTAR_CLIQUES)
         self._instantes = sessao.prepare(INSTANTES_DOS_CLIQUES)
+        self._dispositivos = sessao.prepare(DISPOSITIVOS_DOS_CLIQUES)
 
     def total(self, short_code: str, janela: Janela) -> int:
         return self._sessao.execute(self._contar, (short_code, *janela.milissegundos_incluidos)).one().count
@@ -38,6 +43,10 @@ class ConsultasDeCliques:
         linhas = self._sessao.execute(self._instantes, (short_code, *janela.milissegundos_incluidos))
         # O driver devolve o timestamp sem fuso, em UTC.
         return (linha.clicado_em.replace(tzinfo=UTC) for linha in linhas)
+
+    def dispositivos(self, short_code: str, janela: Janela) -> Iterator[str]:
+        linhas = self._sessao.execute(self._dispositivos, (short_code, *janela.milissegundos_incluidos))
+        return (linha.dispositivo for linha in linhas)
 
 
 def exigir_link(master: redis.Redis, short_code: str) -> None:
@@ -77,3 +86,12 @@ def cliques_por_canal(master: redis.Redis, consultas: ConsultasDeCliques, client
 def total_de_cliques(master: redis.Redis, consultas: ConsultasDeCliques, short_code: str, janela: Janela) -> dict:
     exigir_link(master, short_code)
     return {"short_code": short_code, "cliques": consultas.total(short_code, janela)}
+
+
+def cliques_por_dispositivo(master: redis.Redis, consultas: ConsultasDeCliques, short_code: str, janela: Janela) -> dict:
+    exigir_link(master, short_code)
+    contagem = Counter(consultas.dispositivos(short_code, janela))
+    return {
+        "short_code": short_code,
+        "dispositivos": [{"dispositivo": d, "cliques": contagem[d]} for d in DISPOSITIVOS],
+    }

@@ -1,13 +1,16 @@
+from pathlib import Path
 from typing import Annotated
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 
 from app import analytics, service
 from app.models import URL_HTTP, JanelaDoCliente, JanelaDoLink, NovaCampanha, NovoCliente, NovoLink
 
 router = APIRouter()
+
+PAGINA_DA_TELA = Path(__file__).parent / "static" / "index.html"
 
 PAGINA_EXPIRADO = """<!doctype html>
 <html lang="pt-BR">
@@ -15,6 +18,11 @@ PAGINA_EXPIRADO = """<!doctype html>
 <body><h1>Link expirado</h1><p>Este link curto passou da data de expiração e não redireciona mais.</p></body>
 </html>
 """
+
+
+@router.get("/", include_in_schema=False)
+def tela() -> FileResponse:
+    return FileResponse(PAGINA_DA_TELA)
 
 
 @router.post("/clientes", status_code=201)
@@ -34,6 +42,16 @@ def criar_campanha(pedido: NovaCampanha, request: Request) -> dict:
     return {
         "campanha_id": service.criar_campanha(request.app.state.campanhas, pedido)
         }
+
+
+@router.get("/campanhas")
+def listar_campanhas(cliente_id: Annotated[str, Query(min_length=1)], request: Request) -> list[dict]:
+    return service.listar_campanhas(request.app.state.campanhas, cliente_id)
+
+
+@router.get("/links")
+def listar_links(cliente_id: Annotated[str, Query(min_length=1)], request: Request) -> list[dict]:
+    return service.listar_links(request.app.state.master, cliente_id)
 
 
 @router.post("/links", status_code=201)
@@ -101,6 +119,16 @@ def cliques_por_dia(janela: Annotated[JanelaDoLink, Query()], request: Request) 
 def cliques_por_canal(janela: Annotated[JanelaDoCliente, Query()], request: Request) -> dict:
     estado = request.app.state
     return analytics.cliques_por_canal(estado.master, estado.consultas, janela.cliente_id, janela)
+
+
+@router.get("/analytics/por-dispositivo")
+def cliques_por_dispositivo(janela: Annotated[JanelaDoLink, Query()], request: Request) -> dict:
+    estado = request.app.state
+    try:
+        return analytics.cliques_por_dispositivo(estado.master, estado.consultas, janela.short_code, janela)
+
+    except analytics.LinkInexistente as erro:
+        raise HTTPException(404, str(erro)) from erro
 
 
 @router.get("/analytics/total")

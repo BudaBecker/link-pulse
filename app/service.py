@@ -79,6 +79,44 @@ def criar_campanha(campanhas: Collection, pedido: NovaCampanha) -> str:
     return str(resultado.inserted_id)
 
 
+def listar_campanhas(campanhas: Collection, cliente_id: str) -> list[dict]:
+    lista = [
+        {
+            "campanha_id": str(doc["_id"]),
+            "nome": doc["nome"],
+            "descricao": doc.get("descricao"),
+            "tags": doc.get("tags", []),
+            "links": doc.get("links", []),
+        }
+        for doc in campanhas.find({"cliente_id": cliente_id})
+    ]
+    return sorted(lista, key=lambda c: (c["nome"].lower(), c["campanha_id"]))
+
+
+def listar_links(master: redis.Redis, cliente_id: str) -> list[dict]:
+    codigos = sorted(master.smembers(f"links:cliente:{cliente_id}"))
+    pipe = master.pipeline(transaction=False)
+    for codigo in codigos:
+        pipe.hgetall(f"link:{codigo}")
+        pipe.get(f"contador:{codigo}")
+
+    respostas = pipe.execute()
+    links = [
+        {
+            "short_code": codigo,
+            "url": link.get("url"),
+            "canal": link.get("canal"),
+            "criado_em": link.get("criado_em"),
+            "expira_em": link.get("expira_em"),
+            "contador": int(contador or 0),
+        }
+        for codigo, link, contador in zip(codigos, respostas[::2], respostas[1::2])
+    ]
+    # criado_em tem largura fixa em UTC, então a ordem do texto é a ordem do tempo.
+    links.sort(key=lambda link: (link["criado_em"] or "", link["short_code"]), reverse=True)
+    return links
+
+
 def criar_link(master: redis.Redis, campanhas: Collection, pedido: NovoLink) -> str:
     campanha_id = None
     if pedido.campanha_id is not None:
